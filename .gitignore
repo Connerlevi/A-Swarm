@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.DS_Store
+dist/
+build/
+*.log
+.env
+.secrets/
+.site/
+*.coverage
+.coverage*
+htmlcov/
+*.egg-info/
+*.zip
+*.tar.gz
