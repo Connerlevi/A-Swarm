@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "a-swarm"
+version = "0.0.1"
+description = "A-SWARM — autonomic defense for AI datacenters"
+readme = "README.md"
+requires-python = ">=3.11"
+
+[tool.setuptools]
+packages = ["sentinel", "pheromone", "twinlab", "policy_compiler"]
