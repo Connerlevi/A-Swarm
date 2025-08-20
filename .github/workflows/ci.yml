@@ -1,20 +1,26 @@
 name: ci
 on:
-  push: { branches: [ main ] }
-  pull_request: { branches: [ main ] }
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: '3.11' }
+        with:
+          python-version: '3.11'
       - name: Install
         run: |
           python -m venv .venv
           source .venv/bin/activate
           pip install -r requirements.txt
-      - name: Lint & Test
+      - name: Run tests
         run: |
           source .venv/bin/activate
           pytest -q
