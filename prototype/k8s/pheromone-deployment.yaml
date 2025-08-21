@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aswarm-pheromone
+  namespace: aswarm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aswarm-pheromone
+  template:
+    metadata:
+      labels:
+        app: aswarm-pheromone
+    spec:
+      serviceAccountName: aswarm-sa
+      containers:
+      - name: aggregator
+        image: python:3.11-slim
+        command: ["bash","-c"]
+        args:
+        - |
+          pip install --no-cache-dir kubernetes
+          python - <<'PY'
+          import os, time, json, sys
+          from datetime import datetime, timezone
+          from kubernetes import client, config, watch
+          
+          # in-cluster config
+          config.load_incluster_config()
+          v1 = client.CoreV1Api()
+          ns = "aswarm"
+          w = watch.Watch()
+          threshold = 25  # number of anomaly lines in 10s window to elevate
+          
+          while True:
+              # naive aggregation: count recent 'PORTSCAN' events from anomaly pods via logs
+              pods = v1.list_namespaced_pod(ns, label_selector="app=anomaly").items
+              cnt = 0
+              for p in pods:
+                  try:
+                      lg = v1.read_namespaced_pod_log(p.metadata.name, ns, tail_lines=100)
+                      cnt += lg.count("PORTSCAN")
+                  except Exception:
+                      pass
+              
+              if cnt >= threshold:
+                  ts = datetime.now(timezone.utc).isoformat()
+                  cm = client.V1ConfigMap(
+                      metadata=client.V1ObjectMeta(name="aswarm-elevated"),
+                      data={"elevated":"true","ts":ts,"count":str(cnt)}
+                  )
+                  try:
+                      v1.patch_namespaced_config_map("aswarm-elevated", ns, cm)
+                  except Exception:
+                      v1.create_namespaced_config_map(ns, cm)
+                  print(json.dumps({"elevated": True, "ts": ts, "count": cnt}), flush=True)
+              
+              time.sleep(2)
+          PY
+        resources:
+          requests:
+            cpu: "20m"
+            memory: "64Mi"
+          limits:
+            cpu: "100m"
+            memory: "128Mi"
