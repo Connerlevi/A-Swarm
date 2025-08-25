@@ -25,38 +25,103 @@ spec:
           import os, time, json, sys
           from datetime import datetime, timezone
           from kubernetes import client, config, watch
+          from collections import deque
           
           # in-cluster config
           config.load_incluster_config()
           v1 = client.CoreV1Api()
           ns = "aswarm"
           w = watch.Watch()
-          threshold = 25  # number of anomaly lines in 10s window to elevate
+          
+          # Configuration
+          threshold = 25  # number of anomaly lines in window to elevate
+          window_seconds = 10  # sliding window size
+          scenario_id = os.environ.get("SCENARIO_ID", "portscan-fanout")
+          
+          # Sliding window for event tracking
+          event_window = deque()
           
           while True:
-              # naive aggregation: count recent 'PORTSCAN' events from anomaly pods via logs
+              current_time = time.time()
+              
+              # Remove old events outside window
+              while event_window and event_window[0]["time"] < current_time - window_seconds:
+                  event_window.popleft()
+              
+              # Count recent 'PORTSCAN' events from anomaly pods via logs
               pods = v1.list_namespaced_pod(ns, label_selector="app=anomaly").items
-              cnt = 0
+              witness_pods = set()
+              new_events = 0
+              
               for p in pods:
                   try:
-                      lg = v1.read_namespaced_pod_log(p.metadata.name, ns, tail_lines=100)
-                      cnt += lg.count("PORTSCAN")
-                  except Exception:
+                      lg = v1.read_namespaced_pod_log(p.metadata.name, ns, tail_lines=50)
+                      pod_events = lg.count("PORTSCAN")
+                      if pod_events > 0:
+                          witness_pods.add(p.metadata.name)
+                          # Add events to window
+                          for _ in range(pod_events):
+                              event_window.append({
+                                  "time": current_time,
+                                  "pod": p.metadata.name,
+                                  "type": "PORTSCAN"
+                              })
+                          new_events += pod_events
+                  except Exception as e:
                       pass
               
-              if cnt >= threshold:
+              # Current count in window
+              window_count = len(event_window)
+              
+              if window_count >= threshold:
                   ts = datetime.now(timezone.utc).isoformat()
+                  
+                  # Rich elevation data
+                  elevation_data = {
+                      "elevated": "true",
+                      "ts": ts,
+                      "count": str(window_count),
+                      "window_seconds": str(window_seconds),
+                      "threshold": str(threshold),
+                      "witnesses": str(len(witness_pods)),
+                      "witness_pods": ",".join(sorted(witness_pods)),
+                      "scenario": scenario_id,
+                      "pattern": "lateral-scan",
+                      "confidence": str(min(100, int(window_count / threshold * 50)))
+                  }
+                  
                   cm = client.V1ConfigMap(
                       metadata=client.V1ObjectMeta(name="aswarm-elevated"),
-                      data={"elevated":"true","ts":ts,"count":str(cnt)}
+                      data=elevation_data
                   )
+                  
                   try:
-                      v1.patch_namespaced_config_map("aswarm-elevated", ns, cm)
-                  except Exception:
-                      v1.create_namespaced_config_map(ns, cm)
-                  print(json.dumps({"elevated": True, "ts": ts, "count": cnt}), flush=True)
+                      existing = v1.read_namespaced_config_map("aswarm-elevated", ns)
+                      # Only update if not already elevated or count increased significantly
+                      if existing.data.get("elevated") != "true" or \
+                         int(existing.data.get("count", "0")) < window_count - 5:
+                          v1.patch_namespaced_config_map("aswarm-elevated", ns, cm)
+                          print(json.dumps({
+                              "action": "elevation_updated",
+                              "elevated": True,
+                              "ts": ts,
+                              "count": window_count,
+                              "witnesses": len(witness_pods),
+                              "scenario": scenario_id
+                          }), flush=True)
+                  except client.exceptions.ApiException as e:
+                      if e.status == 404:
+                          v1.create_namespaced_config_map(ns, cm)
+                          print(json.dumps({
+                              "action": "elevation_created",
+                              "elevated": True,
+                              "ts": ts,
+                              "count": window_count,
+                              "witnesses": len(witness_pods),
+                              "scenario": scenario_id
+                          }), flush=True)
               
-              time.sleep(2)
+              time.sleep(1)  # Check more frequently for better accuracy
           PY
         resources:
           requests:

@@ -34,8 +34,11 @@ kubectl apply -f k8s/anomaly-job.yaml
 # 6) Trigger micro-containment for offending label (Ring-1)
 ./scripts/micro_contain.sh app=anomaly aswarm
 
-# 7) Measure & report
+# 7) Measure & report (single run)
 python3 scripts/measure_mttr.py --namespace aswarm
+
+# 8) Run multiple times for percentile metrics
+python3 scripts/measure_mttr.py --namespace aswarm --repeat 5
 ```
 
 ## Quick Start (Windows PowerShell + Docker Desktop Kubernetes)
@@ -57,18 +60,35 @@ kubectl apply -f k8s/anomaly-job.yaml
 # 2) Micro-containment
 powershell -ExecutionPolicy Bypass -File .\scripts\micro_contain.ps1 -Selector "app=anomaly" -Namespace "aswarm"
 
-# 3) Measure
+# 3) Measure (single run)
 python .\scripts\measure_mttr.py --namespace aswarm
+
+# 4) Run multiple times for percentile metrics
+python .\scripts\measure_mttr.py --namespace aswarm --repeat 5
 ```
 
 ## What this demonstrates (MVP)
 
-1. **Coordinated anomaly signal**: A noisy job fans out to many pods; Pheromone aggregates counts and logs an elevated event.
-2. **Micro-containment**: A NetworkPolicy isolates the offender (Ring-1), stopping the fanout (blast radius ↓).
-3. **Audit**: A synthetic Action Certificate JSON is emitted with timestamps for MTTD/MTTR.
-4. **All guardrails**: No changes to SIS/PLCs; reversible; TTL bounded (policy auto-revert optional).
+1. **Coordinated anomaly signal**: A noisy job fans out to many pods; Pheromone aggregates counts in a sliding window and creates a rich elevation event with witness counts, confidence scores, and scenario context.
 
-Note: Sentinel/Pheromone are minimal here—detectors are deterministic stubs. Replace with real logic as you iterate.
+2. **Probe-verified micro-containment**: A NetworkPolicy isolates the offender (Ring-1), with actual connectivity probes verifying the containment is effective (not just a sleep timer).
+
+3. **Signed Action Certificates**: Each run generates a cryptographically signed JSON certificate in `ActionCertificates/` with full audit trail including timestamps, policy hashes, and outcome evidence.
+
+4. **TTL auto-revert safety**: A Kubernetes Job automatically removes the quarantine after the configured TTL (default 120s), ensuring bounded actions.
+
+5. **Production-grade metrics**: 
+   - Uses monotonic clocks for accurate interval timing
+   - Supports batch runs with P50/P95/P99 percentile reporting
+   - Captures containment delay and probe attempts
+
+## Key Improvements
+
+- **Real containment verification**: Probes test actual network connectivity blocks
+- **Rich elevation context**: Window size, witness pods, confidence scores
+- **Audit trail**: Signed certificates with policy hashes and evidence
+- **Safety by default**: Auto-revert ensures actions are always bounded
+- **Investor-ready metrics**: Percentile-based KPIs, not just single runs
 
 ## Files
 
