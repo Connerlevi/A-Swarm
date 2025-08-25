@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: aswarm-sentinel
+  namespace: aswarm
+spec:
+  selector:
+    matchLabels:
+      app: aswarm-sentinel
+  template:
+    metadata:
+      labels:
+        app: aswarm-sentinel
+    spec:
+      serviceAccountName: aswarm-sa
+      containers:
+      - name: sentinel
+        image: python:3.11-slim
+        command: ["bash","-c"]
+        args:
+        - |
+          pip install --no-cache-dir pydantic rich
+          python - <<'PY'
+          import time, sys, json, os, socket, random
+          from datetime import datetime, timezone
+          
+          host = socket.gethostname()
+          while True:
+              # emit a small health delta (stub)
+              msg = {
+                  "ts": datetime.now(timezone.utc).isoformat(),
+                  "host": host,
+                  "packet_sketch": [random.randint(0,2) for _ in range(4)],
+                  "process_graph": {"nodes": 3, "edges": 2}
+              }
+              print(json.dumps(msg), flush=True)
+              time.sleep(1)
+          PY
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "32Mi"
+          limits:
+            cpu: "50m"
+            memory: "64Mi"
