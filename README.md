@@ -2,6 +2,8 @@
 
 **Version:** 2025-08-19
 
+> **For AI assistants and new contributors:** See [CONTEXT.md](CONTEXT.md) for comprehensive project context and technical details.
+
 A-SWARM provides distributed sentinels, a low-bandwidth *pheromone* consensus mesh, a digital-twin-first red/blue lab, a policy compiler with formal guardrails, and cryptographically signed **Action Certificates** for audit.
 
 ## Monorepo Layout
