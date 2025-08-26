@@ -34,7 +34,11 @@ jobs:
       - name: Install A-SWARM prototype via Helm
         run: |
           cd prototype
-          helm upgrade --install aswarm ./helm/aswarm-prototype -n aswarm --create-namespace --wait --timeout=300s
+          # Create namespace if it doesn't exist (but don't fail if it does)
+          kubectl create namespace aswarm --dry-run=client -o yaml | kubectl apply -f -
+          
+          # Install/upgrade the helm chart
+          helm upgrade --install aswarm ./helm/aswarm-prototype -n aswarm --wait --timeout=300s
           kubectl -n aswarm get pods
           # wait for pods to be ready
           kubectl -n aswarm wait --for=condition=Ready pods -l app=aswarm-sentinel --timeout=120s || true
