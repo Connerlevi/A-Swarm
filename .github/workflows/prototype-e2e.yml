@@ -1,0 +1,83 @@
+name: prototype-e2e
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, add-k8s-prototype ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      checks: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install kubectl & Helm
+        run: |
+          curl -LO "https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Set up kind cluster
+        uses: helm/kind-action@v1.9.0
+
+      - name: Install A-SWARM prototype via Helm
+        run: |
+          cd prototype
+          helm upgrade --install aswarm ./helm/aswarm-prototype -n aswarm --create-namespace --wait --timeout=300s
+          kubectl -n aswarm get pods
+          # wait for pods to be ready
+          kubectl -n aswarm wait --for=condition=Ready pods -l app=aswarm-sentinel --timeout=120s || true
+          kubectl -n aswarm wait --for=condition=Available deploy/aswarm-pheromone --timeout=120s || true
+          kubectl -n aswarm wait --for=condition=Available deploy/noisy --timeout=120s || true
+
+      - name: Run preflight checks
+        run: |
+          cd prototype
+          python scripts/preflight.py
+
+      - name: Wait for anomaly job and trigger drill
+        run: |
+          cd prototype
+          # Wait for anomaly job to complete or timeout
+          kubectl -n aswarm wait --for=condition=complete job/anomaly-scan --timeout=300s || true
+          kubectl -n aswarm logs job/anomaly-scan || true
+          
+          # Give pheromone time to detect
+          sleep 10
+          
+          # Check if elevation occurred
+          kubectl -n aswarm get cm aswarm-elevated -o yaml || true
+
+      - name: Measure and collect certificate
+        env:
+          ACTION_CERT_DEMO_KEY: aswarm-ci-demo-key
+        run: |
+          cd prototype
+          pip install -r requirements.txt || true
+          python scripts/measure_mttr.py --namespace aswarm || true
+          mkdir -p artifacts
+          cp -r ActionCertificates artifacts/ || true
+          ls -lah artifacts/ || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: aswarm-prototype-artifacts
+          path: prototype/artifacts
+
+      - name: Display final status
+        run: |
+          kubectl -n aswarm get pods
+          kubectl -n aswarm get networkpolicies
+          kubectl -n aswarm get configmaps
