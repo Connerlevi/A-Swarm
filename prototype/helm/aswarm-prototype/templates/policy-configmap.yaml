@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aswarm-policy
+  namespace: {{ .Values.namespace }}
+data:
+  policy_catalog.yaml: |
+    policies:
+      - id: quarantine-vlan
+        ring: 1
+        action: networkpolicy_isolate
+        params:
+          ttl_seconds: {{ .Values.policy.ttlSeconds }}

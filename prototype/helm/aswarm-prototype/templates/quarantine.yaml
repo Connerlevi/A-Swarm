@@ -1,0 +1,14 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aswarm-quarantine
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      aswarm/quarantine: "true"
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress: []
+  egress: []

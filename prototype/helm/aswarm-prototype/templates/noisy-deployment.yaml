@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: noisy
+  namespace: {{ .Values.namespace }}
+spec:
+  replicas: {{ .Values.noisyReplicas }}
+  selector:
+    matchLabels:
+      app: noisy
+  template:
+    metadata:
+      labels:
+        app: noisy
+    spec:
+      containers:
+      - name: sleeper
+        image: busybox
+        command: ["sh","-c","sleep 3600"]
+        resources:
+          requests:
+            cpu: "5m"
+            memory: "8Mi"
+          limits:
+            cpu: "20m"
+            memory: "32Mi"

@@ -1,0 +1,9 @@
+namespace: aswarm
+noisyReplicas: 30
+anomaly:
+  enabled: true
+  jobName: anomaly-scan
+selectors:
+  offender: "app=anomaly"
+policy:
+  ttlSeconds: 120
