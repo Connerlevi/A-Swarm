@@ -1,0 +1,57 @@
+{
+  "certificate_id": "20250827T161534Z-009",
+  "run_id": "20250827T161534Z-009",
+  "site_id": "aswarm",
+  "asset_id": "anomaly-generator-78955c9ffd-fx7z2",
+  "timestamps": {
+    "anomaly_start": "2025-08-27T16:15:36.199556+00:00",
+    "detect_elevated": "2025-08-27T16:15:36.785476+00:00",
+    "actuation_start": "2025-08-27T16:15:37.860843+00:00",
+    "actuation_effective": "2025-08-27T16:15:38.939161+00:00",
+    "revert_scheduled": "2025-08-27T16:15:39.411699+00:00"
+  },
+  "elevation_context": {
+    "scenario": "portscan-fanout",
+    "pattern": "lateral-scan",
+    "count": 10,
+    "threshold": 5,
+    "window_ms": 500,
+    "witnesses": 1,
+    "witness_pods": [
+      "anomaly-scan-2d5zj"
+    ],
+    "confidence": 1.0,
+    "ts": "2025-08-27T16:15:36.785476+00:00",
+    "elevated": true,
+    "run_id": "20250827T160805Z"
+  },
+  "policy": {
+    "policy_id": "aswarm-quarantine",
+    "version_hash": "d9c0f420845bbe5a7f6f5dcfa403575bb5027b01175593549607c437b0167c7f",
+    "selector": "app=anomaly"
+  },
+  "action": {
+    "ring": 1,
+    "kind": "networkpolicy_isolate",
+    "params": {
+      "selector": "app=anomaly"
+    },
+    "ttl_seconds": 120
+  },
+  "outcome": {
+    "status": "contained",
+    "probe_attempts": 1,
+    "containment_delay_ms": 1078.3,
+    "notes": "connectivity blocked via NetworkPolicy probe"
+  },
+  "metrics": {
+    "MTTD_ms_monotonic": 437.8,
+    "MTTR_s_monotonic": 1.08,
+    "MTTD_ms_wall": 585.9,
+    "MTTR_s_wall": 2.15,
+    "clock_skew_ms": 148.1
+  },
+  "time": {
+    "clock_source": "UTC+NTP"
+  }
+}

@@ -1,0 +1,134 @@
+{{- if and .Values.global.enabled .Values.rbac.create -}}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "aswarm.serviceAccountName" . }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aswarm.labels" . | nindent 4 }}
+---
+# ClusterRole for Sentinel (DaemonSet)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "aswarm.fullname" . }}-sentinel
+  labels:
+    {{- include "aswarm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sentinel
+rules:
+  # Read nodes for topology
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+  # Manage Leases for telemetry
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  # Create events for audit
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create"]
+---
+# ClusterRole for Pheromone (Deployment)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "aswarm.fullname" . }}-pheromone
+  labels:
+    {{- include "aswarm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pheromone
+rules:
+  # Watch Leases for quorum detection
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch"]
+  # Create ConfigMaps for elevation evidence
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "update", "patch"]
+  # Create events for audit
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create"]
+---
+# ClusterRole for MicroAct executor
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "aswarm.fullname" . }}-microact
+  labels:
+    {{- include "aswarm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: microact
+rules:
+  # NetworkPolicy management (Ring 2)
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "create", "delete"]
+  # ConfigMap for policies and evidence
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "update", "patch"]
+  # Pod inspection and labeling
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "update", "patch"]
+  # Events for audit trail
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create"]
+  {{- with .Values.rbac.additionalRules }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
+---
+# ClusterRoleBinding for Sentinel
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "aswarm.fullname" . }}-sentinel
+  labels:
+    {{- include "aswarm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sentinel
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "aswarm.fullname" . }}-sentinel
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "aswarm.serviceAccountName" . }}
+    namespace: {{ .Values.global.namespace }}
+---
+# ClusterRoleBinding for Pheromone  
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "aswarm.fullname" . }}-pheromone
+  labels:
+    {{- include "aswarm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pheromone
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "aswarm.fullname" . }}-pheromone
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "aswarm.serviceAccountName" . }}
+    namespace: {{ .Values.global.namespace }}
+---
+# ClusterRoleBinding for MicroAct
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "aswarm.fullname" . }}-microact
+  labels:
+    {{- include "aswarm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: microact
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "aswarm.fullname" . }}-microact
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "aswarm.serviceAccountName" . }}
+    namespace: {{ .Values.global.namespace }}
+{{- end -}}

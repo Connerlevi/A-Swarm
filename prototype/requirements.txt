@@ -1,0 +1,43 @@
+# A-SWARM Python Dependencies
+# Core Kubernetes client
+kubernetes==29.0.0
+
+# Data processing
+pydantic==2.5.3
+pyyaml==6.0.1
+
+# HTTP and networking
+requests==2.31.0
+urllib3==2.1.0
+
+# Async support (if needed)
+aiohttp==3.9.3
+
+# Metrics and monitoring  
+prometheus-client==0.19.0
+
+# Cryptography for signing
+cryptography==42.0.2
+
+# CLI and utilities
+click==8.1.7
+
+# Development and testing
+pytest==7.4.4
+pytest-asyncio==0.23.3
+pytest-cov==4.1.0
+
+# Optional: Fast JSON parsing
+orjson==3.9.12
+
+# Optional: Better datetime handling
+python-dateutil==2.8.2
+
+# Security: Pin transitive dependencies
+certifi==2024.2.2
+charset-normalizer==3.3.2
+idna==3.6
+
+# Linting and formatting (dev)
+black==24.1.1
+ruff==0.1.15

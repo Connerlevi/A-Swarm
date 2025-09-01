@@ -1,0 +1,18 @@
+site_id: example-dc-01
+time_sync: PTP
+sentinel:
+  resource_limits:
+    cpu_percent_max: 1
+    rss_mb_max: 50
+    egress_kbps_avg_max: 5
+  telemetry:
+    packet_sketch: true
+    process_graph: true
+pheromone:
+  peers:
+    - 10.0.0.11:20700
+    - 10.0.0.12:20700
+  quorum:
+    min_witnesses: 3
+    elevate_threshold: 0.8
+policy_catalog: configs/policy_catalog.example.yaml

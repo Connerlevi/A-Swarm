@@ -1,0 +1,68 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aswarm-microact
+  namespace: aswarm
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: aswarm-microact
+rules:
+# NetworkPolicy management (Ring 2)
+- apiGroups: ["networking.k8s.io"]
+  resources: ["networkpolicies"]
+  verbs: ["get", "list", "create", "delete"]
+# ConfigMap for policies and evidence
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "create", "update", "patch"]
+# Pod inspection for container operations
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+# Events for audit trail
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: aswarm-microact
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: aswarm-microact
+subjects:
+- kind: ServiceAccount
+  name: aswarm-microact
+  namespace: aswarm
+---
+# Namespace-scoped role for pilot isolation
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: aswarm-microact-pilot
+  namespace: workload  # Pilot workload namespace
+rules:
+- apiGroups: ["networking.k8s.io"]
+  resources: ["networkpolicies"]
+  verbs: ["get", "list", "create", "delete"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "update"]  # For labels
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: aswarm-microact-pilot
+  namespace: workload
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: aswarm-microact-pilot
+subjects:
+- kind: ServiceAccount
+  name: aswarm-microact
+  namespace: aswarm

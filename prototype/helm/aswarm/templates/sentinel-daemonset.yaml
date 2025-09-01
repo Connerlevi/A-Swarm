@@ -1,0 +1,95 @@
+{{- if and .Values.global.enabled .Values.sentinel.enabled -}}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "aswarm.fullname" . }}-sentinel
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aswarm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sentinel
+spec:
+  selector:
+    matchLabels:
+      {{- include "aswarm.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: sentinel
+  template:
+    metadata:
+      annotations:
+        checksum/killswitch: {{ include (print $.Template.BasePath "/killswitch-configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "aswarm.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: sentinel
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "aswarm.serviceAccountName" . }}
+      securityContext:
+        fsGroup: 65532
+      containers:
+        - name: sentinel
+          securityContext:
+            {{- toYaml .Values.sentinel.securityContext | nindent 12 }}
+          image: {{ include "aswarm.image" (dict "imageRoot" .Values.sentinel.image "Values" .Values) }}
+          imagePullPolicy: {{ .Values.sentinel.image.pullPolicy }}
+          command:
+            - python
+            - -m
+            - sentinel.telemetry_v2
+          args:
+            - --namespace={{ .Values.global.namespace }}
+            - --cadence-ms={{ .Values.sentinel.telemetry.cadenceMs }}
+            - --window-ms={{ .Values.sentinel.telemetry.windowMs }}
+            {{- if .Values.advanced.debug }}
+            - --debug
+            {{- end }}
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: ASWARM_KILL_SWITCH
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.killSwitch.configMapName }}
+                  key: state
+            - name: ASWARM_DRY_RUN
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.killSwitch.configMapName }}
+                  key: dryrun.enabled
+          {{- if .Values.monitoring.prometheus.enabled }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.monitoring.prometheus.port }}
+              protocol: TCP
+          {{- end }}
+          resources:
+            {{- toYaml .Values.sentinel.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.sentinel.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.sentinel.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      hostNetwork: false
+      hostPID: false
+      hostIPC: false
+{{- end -}}

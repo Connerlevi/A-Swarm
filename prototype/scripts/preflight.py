@@ -39,6 +39,34 @@ def main():
         print(f"❌ Cannot query API resources: {e}", file=sys.stderr)
         sys.exit(2)
 
+    # Check time synchronization
+    try:
+        # Check if NTP/chrony is running (Linux)
+        time_sync_ok = False
+        try:
+            ntp_status = sh(["systemctl", "is-active", "ntp"])
+            if ntp_status == "active":
+                time_sync_ok = True
+        except:
+            pass
+        
+        if not time_sync_ok:
+            try:
+                chrony_status = sh(["systemctl", "is-active", "chronyd"])
+                if chrony_status == "active":
+                    time_sync_ok = True
+            except:
+                pass
+        
+        if time_sync_ok:
+            print("✅ Time synchronization service active (recommended: <50ms skew)")
+        else:
+            print("⚠️  Time sync not detected - ensure NTP/PTP configured with <50ms skew")
+        status["time_sync"] = time_sync_ok
+    except:
+        print("⚠️  Could not check time sync status")
+        status["time_sync"] = "unknown"
+
     # Test apply in dry-run
     try:
         sh(["kubectl","apply","-f","k8s/baseline-allow.yaml","--dry-run=client"])

@@ -1,0 +1,35 @@
+# Base image for A-SWARM components
+FROM python:3.12-slim-bookworm AS base
+
+# Security: Create non-root user
+RUN groupadd --gid 65532 aswarm && \
+    useradd --uid 65532 --gid aswarm --shell /bin/bash --create-home aswarm
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install kubectl for Kubernetes operations
+ARG KUBECTL_VERSION=v1.29.1
+RUN curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" && \
+    chmod +x kubectl && \
+    mv kubectl /usr/local/bin/
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements first for better layer caching
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Security: Switch to non-root user
+USER aswarm:aswarm
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import requests; requests.get('http://localhost:8080/healthz', timeout=5)" || exit 1

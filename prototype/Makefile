@@ -1,7 +1,7 @@
 NAMESPACE ?= aswarm
 SELECTOR ?= app=anomaly
 
-.PHONY: up deploy drill report dashboard helm-install helm-uninstall preflight clean
+.PHONY: up deploy drill report dashboard helm-install helm-uninstall preflight evidence-pack validate-slo build-images verify-images clean
 
 up:
 	@echo "Using Docker Desktop or k3d externally. See prototype README."
@@ -69,8 +69,39 @@ helm-uninstall:
 preflight:
 	python scripts/preflight.py
 
+evidence-pack:
+	@echo "Generating evidence pack for $(NAMESPACE) namespace..."
+	python scripts/generate_evidence_pack.py --namespace=$(NAMESPACE) --run-prefix=$(RUN_PREFIX) --output=EvidencePack.zip
+	@echo "Evidence pack generated: EvidencePack.zip"
+	@echo "Open kpi_report.html from the zip for executive dashboard"
+
+validate-slo: evidence-pack
+	@echo "Validating evidence pack against SLOs..."
+	python scripts/validate_slo.py EvidencePack.zip
+
+build-images:
+	@echo "Building A-SWARM container images..."
+	./scripts/build_images.sh
+
+build-images-prod: 
+	@echo "Building production images with signing..."
+	SIGN_IMAGES=true GENERATE_SBOM=true ./scripts/build_images.sh
+
+verify-images:
+	@echo "Verifying A-SWARM image signatures and SBOMs..."
+	./scripts/verify_images.sh
+
+security-scan:
+	@echo "Running security analysis on SBOMs..."
+	@if [ -d "./sboms" ]; then \
+		python scripts/analyze_sbom.py ./sboms --compliance-check; \
+	else \
+		echo "No SBOMs found. Run 'make build-images-prod' first"; \
+	fi
+
 clean:
 	rm -rf ActionCertificates/
+	rm -f EvidencePack.zip
 	kubectl delete namespace $(NAMESPACE) --ignore-not-found=true
 
 help:
@@ -80,6 +111,7 @@ help:
 	@echo "  make preflight     # Check prerequisites"
 	@echo "  make helm-install  # Deploy via Helm"
 	@echo "  make drill         # Run anomaly drill"
+	@echo "  make evidence-pack # Generate evidence package"
 	@echo "  make dashboard     # Launch KPI board"
 	@echo ""
 	@echo "Manual deployment:"
@@ -87,6 +119,10 @@ help:
 	@echo "  make drill         # Single drill"
 	@echo "  make drill-repeat  # 5 drills for percentiles"
 	@echo "  make report        # Show certificate summary"
+	@echo ""
+	@echo "Evidence & Reporting:"
+	@echo "  make evidence-pack # Generate comprehensive evidence ZIP"
+	@echo "                     # Options: RUN_PREFIX=slo"
 	@echo ""
 	@echo "Cleanup:"
 	@echo "  make clean         # Remove certificates & namespace"

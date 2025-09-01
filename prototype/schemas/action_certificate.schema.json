@@ -1,0 +1,104 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ActionCertificate",
+  "type": "object",
+  "properties": {
+    "certificate_id": {
+      "type": "string"
+    },
+    "site_id": {
+      "type": "string"
+    },
+    "asset_id": {
+      "type": "string"
+    },
+    "timestamps": {
+      "type": "object",
+      "properties": {
+        "anomaly_start": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "detect_elevated": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "actuation_start": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "actuation_effective": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "detect_elevated",
+        "actuation_start"
+      ]
+    },
+    "policy": {
+      "type": "object",
+      "properties": {
+        "policy_id": {
+          "type": "string"
+        },
+        "version_hash": {
+          "type": "string"
+        },
+        "proof_hash": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "policy_id"
+      ]
+    },
+    "action": {
+      "type": "object",
+      "properties": {
+        "ring": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "params": {
+          "type": "object"
+        },
+        "ttl_seconds": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "ring",
+        "kind"
+      ]
+    },
+    "outcome": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "signatures": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "certificate_id",
+    "site_id",
+    "asset_id",
+    "timestamps",
+    "policy",
+    "action"
+  ]
+}

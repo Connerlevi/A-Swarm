@@ -1,0 +1,68 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: aswarm-pheromone-fast
+  namespace: aswarm
+  labels:
+    app.kubernetes.io/name: pheromone
+    app.kubernetes.io/component: aggregator
+spec:
+  selector:
+    app.kubernetes.io/name: pheromone
+    app.kubernetes.io/component: aggregator
+  ports:
+    - name: udp-fastpath
+      protocol: UDP
+      port: 8888
+      targetPort: 8888
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aswarm-pheromone-fast
+  namespace: aswarm
+  labels:
+    app.kubernetes.io/name: pheromone
+    app.kubernetes.io/component: aggregator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pheromone
+      app.kubernetes.io/component: aggregator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pheromone
+        app.kubernetes.io/component: aggregator
+        aswarm.ai/fastpath: "true"
+    spec:
+      serviceAccountName: aswarm-sa
+      containers:
+      - name: pheromone
+        image: busybox
+        command: ["/bin/sh"]
+        args: ["-c", "echo 'Fast-path Pheromone placeholder running'; sleep infinity"]
+        env:
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: ASWARM_FASTPATH_KEY
+          valueFrom:
+            secretKeyRef:
+              name: aswarm-fastpath-key
+              key: key
+              optional: true
+        ports:
+        - name: udp-fastpath
+          containerPort: 8888
+          protocol: UDP
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "10m"
+          limits:
+            memory: "64Mi"
+            cpu: "50m"

@@ -1,0 +1,62 @@
+# Dockerfile for A-SWARM Pheromone
+FROM python:3.12-slim-bookworm AS base
+
+# Metadata
+LABEL org.opencontainers.image.title="A-SWARM Pheromone"
+LABEL org.opencontainers.image.description="Autonomic defense quorum detector"
+LABEL org.opencontainers.image.vendor="A-SWARM Project"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.source="https://github.com/anthropics/aswarm"
+LABEL org.opencontainers.image.documentation="https://docs.aswarm.ai"
+
+# Build-time metadata
+ARG BUILD_DATE
+ARG VCS_REF
+ARG VERSION
+LABEL org.opencontainers.image.created=$BUILD_DATE
+LABEL org.opencontainers.image.revision=$VCS_REF
+LABEL org.opencontainers.image.version=$VERSION
+
+# Security: Create non-root user
+RUN groupadd --gid 65532 aswarm && \
+    useradd --uid 65532 --gid aswarm --shell /bin/bash --create-home aswarm
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install kubectl
+ARG KUBECTL_VERSION=v1.29.1
+RUN curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" && \
+    chmod +x kubectl && \
+    mv kubectl /usr/local/bin/ && \
+    kubectl version --client
+
+# Set working directory
+WORKDIR /app
+
+# Copy Python requirements
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY --chown=aswarm:aswarm . .
+
+# Create directories for runtime
+RUN mkdir -p /tmp/aswarm && chown aswarm:aswarm /tmp/aswarm
+
+# Security: Switch to non-root user
+USER aswarm:aswarm
+
+# Expose ports
+EXPOSE 8080 9090
+
+# Default command
+CMD ["python", "-m", "pheromone.gossip_v2"]
+
+# Health check for Pheromone
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -f http://localhost:8080/healthz || exit 1
