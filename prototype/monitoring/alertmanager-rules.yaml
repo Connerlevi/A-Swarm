@@ -1,0 +1,166 @@
+# A-SWARM SLO Monitoring and Alerting Rules
+# Prometheus alerting rules for burn rate monitoring
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: aswarm-slo-alerts
+  namespace: aswarm
+  labels:
+    app: aswarm
+spec:
+  groups:
+  - name: aswarm.slo.detection
+    rules:
+    # MTTD (Mean Time To Detect) SLO: P95 < 200ms
+    - alert: ASWARMDetectionSLOBurnRateHigh
+      expr: |
+        (
+          (rate(aswarm_mttd_seconds_bucket{le="0.2"}[1h]) / rate(aswarm_mttd_seconds_count[1h])) < 0.95
+        ) * 100 > 2
+      for: 2m
+      labels:
+        severity: warning
+        component: detection
+      annotations:
+        summary: "A-SWARM detection SLO burn rate high"
+        description: "Detection P95 < 200ms SLO burning at {{ $value }}% over 1h (threshold: 2%)"
+        
+    - alert: ASWARMDetectionSLOBurnRateCritical  
+      expr: |
+        (
+          (rate(aswarm_mttd_seconds_bucket{le="0.2"}[6h]) / rate(aswarm_mttd_seconds_count[6h])) < 0.95
+        ) * 100 > 5
+      for: 15m
+      labels:
+        severity: critical
+        component: detection
+      annotations:
+        summary: "A-SWARM detection SLO burn rate critical"
+        description: "Detection P95 < 200ms SLO burning at {{ $value }}% over 6h (threshold: 5%)"
+
+  - name: aswarm.slo.response
+    rules:
+    # MTTR (Mean Time To Respond) SLO: P95 < 5s
+    - alert: ASWARMResponseSLOBurnRateHigh
+      expr: |
+        (
+          (rate(aswarm_mttr_seconds_bucket{le="5.0"}[1h]) / rate(aswarm_mttr_seconds_count[1h])) < 0.95
+        ) * 100 > 2
+      for: 2m
+      labels:
+        severity: warning  
+        component: response
+      annotations:
+        summary: "A-SWARM response SLO burn rate high"
+        description: "Response P95 < 5s SLO burning at {{ $value }}% over 1h (threshold: 2%)"
+
+    - alert: ASWARMResponseSLOBurnRateCritical
+      expr: |
+        (
+          (rate(aswarm_mttr_seconds_bucket{le="5.0"}[6h]) / rate(aswarm_mttr_seconds_count[6h])) < 0.95  
+        ) * 100 > 5
+      for: 15m
+      labels:
+        severity: critical
+        component: response
+      annotations:
+        summary: "A-SWARM response SLO burn rate critical"
+        description: "Response P95 < 5s SLO burning at {{ $value }}% over 6h (threshold: 5%)"
+
+  - name: aswarm.operational
+    rules:
+    # Fast-path UDP health
+    - alert: ASWARMFastPathDown
+      expr: |
+        up{job="aswarm-pheromone"} == 0
+      for: 30s
+      labels:
+        severity: critical
+        component: fastpath
+      annotations:
+        summary: "A-SWARM fast-path receiver down"
+        description: "Pheromone UDP listener not responding"
+
+    # Kill switch monitoring
+    - alert: ASWARMKillSwitchActivated
+      expr: |
+        aswarm_kill_switch_state == 0
+      for: 0s
+      labels:
+        severity: warning
+        component: killswitch
+      annotations:
+        summary: "A-SWARM kill switch activated"
+        description: "Kill switch state changed to disabled - all enforcement stopped"
+
+    # High detection volume
+    - alert: ASWARMDetectionVolumeHigh
+      expr: |
+        rate(aswarm_detections_total[5m]) > 100
+      for: 2m
+      labels:
+        severity: warning
+        component: detection
+      annotations:
+        summary: "A-SWARM detection volume high"
+        description: "Detection rate {{ $value }} events/sec over 5m (possible attack)"
+
+    # Containment action failures
+    - alert: ASWARMContainmentFailures
+      expr: |
+        rate(aswarm_containments_total{status="failed"}[10m]) > 0.1
+      for: 1m
+      labels:
+        severity: critical
+        component: containment
+      annotations:
+        summary: "A-SWARM containment actions failing"
+        description: "Containment failure rate {{ $value }} actions/sec"
+
+---
+# SLO Dashboard ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aswarm-slo-dashboard
+  namespace: aswarm
+data:
+  dashboard.json: |
+    {
+      "dashboard": {
+        "title": "A-SWARM SLO Monitoring",
+        "panels": [
+          {
+            "title": "MTTD P95 (Target: <200ms)",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "histogram_quantile(0.95, rate(aswarm_mttd_seconds_bucket[5m])) * 1000",
+                "legendFormat": "P95 MTTD (ms)"
+              }
+            ]
+          },
+          {
+            "title": "MTTR P95 (Target: <5s)", 
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "histogram_quantile(0.95, rate(aswarm_mttr_seconds_bucket[5m]))",
+                "legendFormat": "P95 MTTR (s)"
+              }
+            ]
+          },
+          {
+            "title": "Detection Rate",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "rate(aswarm_detections_total[1m])",
+                "legendFormat": "Detections/sec"
+              }
+            ]
+          }
+        ]
+      }
+    }

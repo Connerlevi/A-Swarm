@@ -1,0 +1,57 @@
+{{- if .Values.anomaly.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Values.anomaly.jobName }}
+  namespace: {{ .Values.namespace }}
+spec:
+  template:
+    metadata:
+      labels:
+        app: anomaly
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: scanner
+        image: python:3.11-slim
+        command: ["bash","-c"]
+        args:
+        - |
+          python - <<'PY'
+          import os, socket, time, random, sys
+          from datetime import datetime, timezone
+          import subprocess
+          
+          # mark t0
+          t0 = datetime.now(timezone.utc).isoformat()
+          print(f"T_ANOMALY_START {t0}", flush=True)
+          
+          # simple fanout: try connect to many pod IPs on random ports
+          def ips():
+              out = subprocess.check_output("getent hosts $(hostname -I)", shell=True).decode("utf-8")
+              return [x for x in out.split() if x.count('.')==3]
+          
+          targets = [f"noisy-{i}.{{ .Values.namespace }}.svc.cluster.local" for i in range(0,100)]
+          for i in range(800):
+              host = random.choice(targets)
+              port = random.randint(1, 1024)
+              s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+              s.settimeout(0.05)
+              try:
+                  s.connect((host, port))
+              except Exception:
+                  pass
+              finally:
+                  s.close()
+              if i % 20 == 0:
+                  print("PORTSCAN", flush=True)
+              time.sleep(0.05)
+          PY
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+          limits:
+            cpu: "200m"
+            memory: "128Mi"
+{{- end }}

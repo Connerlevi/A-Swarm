@@ -1,0 +1,344 @@
+# Pre-pull DaemonSet to warm node caches for instant A-SWARM deployments
+# Split by architecture for proper digest handling
+
+---
+# High priority for image pre-pull on new nodes
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: aswarm-prepull-high
+  labels:
+    aswarm.io/component: image-cache
+value: 900000000
+globalDefault: false
+description: "Ensure image pre-pull runs promptly on new nodes"
+
+---
+# AMD64 Pre-pull DaemonSet
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: aswarm-image-prepull-amd64
+  namespace: kube-system
+  labels:
+    app: aswarm-image-prepull
+    aswarm.io/component: image-cache
+    aswarm.io/arch: amd64
+  annotations:
+    aswarm.io/description: "Pre-pulls A-SWARM images on AMD64 nodes for instant deployments"
+spec:
+  selector:
+    matchLabels:
+      app: aswarm-image-prepull
+      aswarm.io/arch: amd64
+  template:
+    metadata:
+      labels:
+        app: aswarm-image-prepull
+        aswarm.io/component: image-cache
+        aswarm.io/arch: amd64
+      annotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "true"
+    spec:
+      priorityClassName: aswarm-prepull-high
+      hostPID: false
+      hostNetwork: false
+      automountServiceAccountToken: false  # No API access needed
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      nodeSelector:
+        kubernetes.io/arch: amd64
+        kubernetes.io/os: linux
+      tolerations:
+      # Run on all nodes including control plane and tainted nodes
+      - operator: Exists
+        effect: NoSchedule
+      - operator: Exists
+        effect: NoExecute
+      - operator: Exists
+        effect: PreferNoSchedule
+      initContainers:
+      # Pre-pull A-SWARM images on node startup (AMD64 digests)
+      - name: prepull-attacklet
+        image: ghcr.io/aswarm-security/attacklet@sha256:placeholder-amd64  # Updated by CI/CD
+        command: ["/attacklet", "--version"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65532
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+      - name: prepull-red-harness
+        image: ghcr.io/aswarm-security/red-harness@sha256:placeholder-amd64  # Updated by CI/CD
+        command: ["python", "/app/harness_v2_secure.py", "--help"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65532
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      - name: prepull-blue-stub
+        image: ghcr.io/aswarm-security/blue-stub@sha256:placeholder-amd64  # Updated by CI/CD
+        command: ["/bin/sh", "-c", "echo 'Blue stub image cached'"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65532
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+      # Pre-pull infrastructure dependencies
+      - name: prepull-cert-manager
+        image: quay.io/jetstack/cert-manager-controller@sha256:placeholder-cert-manager-amd64
+        command: ["/manager", "--version"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 50m
+            memory: 32Mi
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+      containers:
+      # Minimal pause container to keep DaemonSet alive
+      - name: pause
+        image: registry.k8s.io/pause:3.9@sha256:7031c1b283388d2c2e09b57badb803c05ebed362dc88d84b480cc47f72a21097
+        resources:
+          requests:
+            cpu: 1m
+            memory: 2Mi
+          limits:
+            cpu: 10m
+            memory: 8Mi
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65535
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      terminationGracePeriodSeconds: 1
+
+---
+# ARM64 Pre-pull DaemonSet
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: aswarm-image-prepull-arm64
+  namespace: kube-system
+  labels:
+    app: aswarm-image-prepull
+    aswarm.io/component: image-cache
+    aswarm.io/arch: arm64
+  annotations:
+    aswarm.io/description: "Pre-pulls A-SWARM images on ARM64 nodes for instant deployments"
+spec:
+  selector:
+    matchLabels:
+      app: aswarm-image-prepull
+      aswarm.io/arch: arm64
+  template:
+    metadata:
+      labels:
+        app: aswarm-image-prepull
+        aswarm.io/component: image-cache
+        aswarm.io/arch: arm64
+      annotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "true"
+    spec:
+      priorityClassName: aswarm-prepull-high
+      hostPID: false
+      hostNetwork: false
+      automountServiceAccountToken: false  # No API access needed
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      nodeSelector:
+        kubernetes.io/arch: arm64
+        kubernetes.io/os: linux
+      tolerations:
+      # Run on all nodes including control plane and tainted nodes
+      - operator: Exists
+        effect: NoSchedule
+      - operator: Exists
+        effect: NoExecute
+      - operator: Exists
+        effect: PreferNoSchedule
+      initContainers:
+      # Pre-pull A-SWARM images on node startup (ARM64 digests)
+      - name: prepull-attacklet
+        image: ghcr.io/aswarm-security/attacklet@sha256:placeholder-arm64  # Updated by CI/CD
+        command: ["/attacklet", "--version"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65532
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+      - name: prepull-red-harness
+        image: ghcr.io/aswarm-security/red-harness@sha256:placeholder-arm64  # Updated by CI/CD
+        command: ["python", "/app/harness_v2_secure.py", "--help"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65532
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      - name: prepull-blue-stub
+        image: ghcr.io/aswarm-security/blue-stub@sha256:placeholder-arm64  # Updated by CI/CD
+        command: ["/bin/sh", "-c", "echo 'Blue stub image cached'"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65532
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+      # Pre-pull infrastructure dependencies
+      - name: prepull-cert-manager
+        image: quay.io/jetstack/cert-manager-controller@sha256:placeholder-cert-manager-arm64
+        command: ["/manager", "--version"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 50m
+            memory: 32Mi
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+      containers:
+      # Minimal pause container to keep DaemonSet alive
+      - name: pause
+        image: registry.k8s.io/pause:3.9@sha256:7031c1b283388d2c2e09b57badb803c05ebed362dc88d84b480cc47f72a21097
+        resources:
+          requests:
+            cpu: 1m
+            memory: 2Mi
+          limits:
+            cpu: 10m
+            memory: 8Mi
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65535
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      terminationGracePeriodSeconds: 1
+
+---
+# ConfigMap for image digests (metadata/inventory only - updated by CI/CD)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aswarm-image-digests
+  namespace: kube-system
+  labels:
+    aswarm.io/component: image-cache
+  annotations:
+    aswarm.io/updated-by: "ci-cd-pipeline"
+    aswarm.io/update-frequency: "weekly-rebake-or-critical-cve"
+    aswarm.io/usage: "metadata-only-not-consumed-by-daemonset"
+data:
+  # AMD64 digests (updated by CI/CD)
+  attacklet-amd64-digest: "sha256:placeholder-amd64"
+  red-harness-amd64-digest: "sha256:placeholder-amd64"
+  blue-stub-amd64-digest: "sha256:placeholder-amd64"
+  cert-manager-amd64-digest: "sha256:placeholder-cert-manager-amd64"
+  
+  # ARM64 digests (updated by CI/CD)
+  attacklet-arm64-digest: "sha256:placeholder-arm64"
+  red-harness-arm64-digest: "sha256:placeholder-arm64"
+  blue-stub-arm64-digest: "sha256:placeholder-arm64"
+  cert-manager-arm64-digest: "sha256:placeholder-cert-manager-arm64"
+  
+  # Version tracking
+  release-version: "2.0.0"
+  last-updated: "2025-01-09T00:00:00Z"
+  last-updated-by: "github-actions"
+
+---
+# PodDisruptionBudget to ensure pre-pull availability during updates
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: aswarm-image-prepull
+  namespace: kube-system
+  labels:
+    aswarm.io/component: image-cache
+spec:
+  minAvailable: 50%  # Keep at least half the nodes warm during updates
+  selector:
+    matchLabels:
+      app: aswarm-image-prepull

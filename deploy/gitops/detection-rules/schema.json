@@ -1,0 +1,242 @@
+{
+  "$id": "https://aswarm.ai/schemas/detection-rules/1.1.0",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "A-SWARM Detection Rules v1.1.0",
+  "description": "Schema for A-SWARM Blue API detection rules with test fixtures and operational metadata",
+  "type": "object",
+  "required": ["metadata", "content"],
+  "properties": {
+    "metadata": {
+      "type": "object",
+      "required": ["name", "version", "schema_version", "content_type", "created", "author"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9._-]+$"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "schema_version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "engine_min_version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "content_type": {
+          "const": "detection-rules"
+        },
+        "created": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "author": {
+          "type": "string"
+        },
+        "defaults": {
+          "type": "object",
+          "properties": {
+            "window_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 86400
+            },
+            "cooldown_seconds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 3600
+            }
+          },
+          "additionalProperties": false
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 128
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "content": {
+      "type": "object",
+      "required": ["detection_rules"],
+      "properties": {
+        "detection_rules": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1000,
+          "items": {
+            "type": "object",
+            "required": ["id", "name", "description", "query", "severity", "enabled", "threshold", "metadata"],
+            "properties": {
+              "rule_uuid": {
+                "type": "string",
+                "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+              },
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+$",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "query": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "severity": {
+                "type": "string",
+                "enum": ["critical", "high", "medium", "low"]
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "threshold": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "window_seconds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 86400
+              },
+              "cooldown_seconds": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3600
+              },
+              "dedup_seconds": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 86400
+              },
+              "valid_from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "valid_to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string",
+                  "maxLength": 128
+                }
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 64,
+                  "pattern": "^[A-Za-z0-9._-]+$"
+                },
+                "maxItems": 32
+              },
+              "notes": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "metadata": {
+                "type": "object",
+                "required": ["mitre_technique", "mitre_tactic"],
+                "properties": {
+                  "mitre_technique": {
+                    "type": "string",
+                    "pattern": "^T[0-9]{4}(\\.[0-9]{3})?$"
+                  },
+                  "mitre_sub_technique": {
+                    "type": "string",
+                    "pattern": "^T[0-9]{4}\\.[0-9]{3}$"
+                  },
+                  "mitre_tactic": {
+                    "type": "string",
+                    "enum": [
+                      "Initial Access",
+                      "Execution",
+                      "Persistence",
+                      "Privilege Escalation",
+                      "Defense Evasion",
+                      "Credential Access",
+                      "Discovery",
+                      "Lateral Movement",
+                      "Collection",
+                      "Command and Control",
+                      "Exfiltration",
+                      "Impact"
+                    ]
+                  },
+                  "data_sources": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": ["process", "auth", "network", "dns", "file", "registry", "kernel", "cloud", "api", "telemetry", "endpoint", "other"]
+                    }
+                  },
+                  "owner": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9._-]+$"
+                  },
+                  "references": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "uri"
+                    }
+                  }
+                },
+                "additionalProperties": true
+              },
+              "tests": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["name", "event", "should_match"],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9_]+$"
+                    },
+                    "event": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "should_match": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

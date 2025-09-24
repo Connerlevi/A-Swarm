@@ -1,0 +1,714 @@
+# Create improved Mission Control assets: HTML (no framework), backend skeleton, deploy script, and operator guide.
+import os, textwrap, json, base64, datetime, pathlib
+
+root = "/mnt/data"
+ts = datetime.datetime.now().isoformat()
+
+# --- 1) mission_control_pro.html ---
+html = r"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A-SWARM Mission Control — Pilot MVP (HTML)</title>
+  <style>
+    :root{
+      --bg: #0b1220;
+      --panel: #0e172a;
+      --panel-2:#0a1222;
+      --border:#1e293b;
+      --text:#e2e8f0;
+      --muted:#9aa4b2;
+      --brand:#34d399;
+      --warn:#facc15;
+      --crit:#ef4444;
+      --accent:#67e8f9;
+      --ok:#22c55e;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+      background: linear-gradient(180deg, #060b16, var(--bg));
+      color:var(--text);
+    }
+    a{color:var(--accent);text-decoration:none}
+    .container{max-width:1200px;margin:0 auto;padding:16px}
+    .header{
+      position:sticky;top:0;z-index:1000;
+      display:flex;align-items:center;justify-content:space-between;
+      padding:12px 16px;border-bottom:1px solid var(--border);
+      background:rgba(11,18,32,0.8);backdrop-filter:blur(10px)
+    }
+    .brand{display:flex;gap:12px;align-items:center}
+    .dot{display:inline-block;width:10px;height:10px;border-radius:50%}
+    .dot.ok{background:var(--ok);box-shadow:0 0 10px var(--ok)}
+    .dot.warn{background:var(--warn);box-shadow:0 0 10px var(--warn)}
+    .dot.crit{background:var(--crit);box-shadow:0 0 10px var(--crit)}
+    .grid{display:grid;gap:16px}
+    @media(min-width:960px){.grid.cols-2{grid-template-columns:1fr 1fr}}
+    .card{background:var(--panel);border:1px solid var(--border);border-radius:14px}
+    .card .hd{padding:14px 16px;border-bottom:1px solid var(--border)}
+    .card .bd{padding:14px 16px}
+    .kpi{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+    .kpi .item{background:var(--panel-2);border:1px solid var(--border);border-radius:12px;padding:10px}
+    .muted{color:var(--muted)}
+    .badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:2px 8px;border-radius:999px;border:1px solid var(--border);background:#0a1628}
+    .badge.crit{border-color:#7f1d1d;background:#1b0a0a;color:#fda4af}
+    .badge.high{border-color:#7c2d12;background:#1b1008;color:#fdba74}
+    .badge.med{border-color:#854d0e;background:#1a1307;color:#fde68a}
+    .badge.low{border-color:#065f46;background:#031a16;color:#a7f3d0}
+    .btn{cursor:pointer;background:#12203a;border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:10px}
+    .btn.primary{background:#143042;border-color:#275e77}
+    .btn.destructive{background:#3a1212;border-color:#7f1d1d}
+    .row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+    .list{display:flex;flex-direction:column;gap:10px;max-height:270px;overflow:auto}
+    .episode{border:1px solid var(--border);border-radius:10px;padding:8px}
+    .episode .top{display:flex;align-items:center;justify-content:space-between}
+    .mini{font-size:12px}
+    .pill{font-size:12px;padding:2px 8px;border-radius:999px;border:1px solid var(--border);background:#0a1628}
+    .pill.status-detected{background:#041a12;border-color:#113c2c;color:#6ee7b7}
+    .pill.status-running{background:#1d1908;border-color:#6b5707;color:#fde68a}
+    .pill.status-contained{background:#07181e;border-color:#0b3b47;color:#67e8f9}
+    .pill.status-resolved{background:#0a141d;border-color:#0f2a3d;color:#93c5fd}
+    .pill.status-failed{background:#200d0d;border-color:#7f1d1d;color:#fda4af}
+    .switch{display:flex;align-items:center;gap:10px}
+    .switch input{transform:scale(1.3)}
+    .monospace{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace}
+    .event-stream{max-height:180px;overflow:auto;font-size:12px}
+    .event.info{color:#a7f3d0}.event.warn{color:#fde68a}.event.error{color:#fecaca}
+    .timeline{height:120px;background:var(--panel-2);border:1px solid var(--border);border-radius:12px;position:relative;overflow:hidden}
+    .tooltip{position:absolute;background:#020617;border:1px solid var(--border);padding:6px 8px;border-radius:8px;font-size:12px;display:none;white-space:nowrap;z-index:10}
+    .help{position:fixed;inset:0;background:rgba(2,6,23,0.8);backdrop-filter:blur(6px);display:none;align-items:center;justify-content:center}
+    .help .box{background:#0b1220;border:1px solid var(--border);border-radius:16px;max-width:720px;padding:20px}
+    .kbd{display:inline-block;border:1px solid var(--border);background:#0f172a;padding:2px 6px;border-radius:6px;font-family:monospace}
+    .search{position:relative}
+    .search input{width:100%;background:#0c1a2e;border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:10px}
+    .search .icon{position:absolute;left:8px;top:8px;opacity:0.6}
+    .tags{display:flex;gap:8px;flex-wrap:wrap}
+    .hr{height:1px;background:var(--border);margin:8px 0}
+  </style>
+</head>
+<body>
+  <header class="header">
+    <div class="brand">
+      <div class="dot ok" id="conn-dot" title="WebSocket connection status"></div>
+      <div>
+        <div class="muted mini monospace">Protocol V4 • Zero-Compromise</div>
+        <div style="font-weight:700">A-SWARM Mission Control</div>
+      </div>
+    </div>
+    <div class="row mini muted">
+      <div id="conn-state">Connected</div>
+      <div class="hr" style="width:1px;height:16px"></div>
+      <div id="clock"></div>
+      <div class="hr" style="width:1px;height:16px"></div>
+      <div><span class="kbd">?</span> Help</div>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="grid cols-2">
+      <!-- Kill switch -->
+      <div class="card">
+        <div class="hd">
+          <strong>Kill Switch Governance</strong>
+          <div class="mini muted">Two-person rule • TTL auto-revert</div>
+        </div>
+        <div class="bd">
+          <div id="kill-state" class="row" style="justify-content:space-between">
+            <div class="pill" id="kill-pill">SYSTEM ARMED</div>
+            <div class="row">
+              <div class="switch" title="Operator 1 approval (shortcut: 1)">
+                <label class="mini muted">Operator 1</label><input id="op1" type="checkbox">
+              </div>
+              <div class="switch" title="Operator 2 approval (shortcut: 2)">
+                <label class="mini muted">Operator 2</label><input id="op2" type="checkbox">
+              </div>
+              <button class="btn destructive" id="engage" disabled title="Engage kill switch (Enter)">Engage</button>
+            </div>
+          </div>
+          <div class="row" style="justify-content:space-between;margin-top:8px">
+            <div class="mini muted">TTL AUTO-REVERT</div>
+            <div id="ttl" class="mini monospace" title="Time to auto-revert">300s</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Episodes -->
+      <div class="card" id="panel-episodes">
+        <div class="hd row" style="justify-content:space-between">
+          <div>
+            <strong>Red / Blue Episodes</strong>
+            <div class="mini muted">Live incidents & training episodes</div>
+          </div>
+          <div class="row mini">
+            <div class="pill">MTTD <span id="mttd">0.08</span> ms</div>
+            <div class="pill">MTTR <span id="mttr">1.3</span> s</div>
+            <div class="pill">Detect <span id="det-rate">100</span>%</div>
+          </div>
+        </div>
+        <div class="bd">
+          <div id="episodes" class="list" aria-label="Episodes list"></div>
+          <div class="timeline" id="timeline" title="Episode timeline (click markers for details)"></div>
+          <div class="tooltip" id="tt"></div>
+        </div>
+      </div>
+
+      <!-- Fleet -->
+      <div class="card" id="panel-fleet">
+        <div class="hd">
+          <strong>Fleet Status</strong>
+          <div class="mini muted">Sentinel health & footprint</div>
+        </div>
+        <div class="bd">
+          <div class="row mini" style="gap:20px">
+            <div>Sentinels: <b id="f-total">0</b></div>
+            <div>Healthy: <b id="f-healthy">0</b></div>
+            <div>CPU: <b id="f-cpu">0%</b></div>
+            <div>Memory: <b id="f-mem">0MB</b></div>
+          </div>
+          <div id="fleet" class="list" style="max-height:220px"></div>
+        </div>
+      </div>
+
+      <!-- Rules -->
+      <div class="card" id="panel-rules">
+        <div class="hd row" style="justify-content:space-between">
+          <div>
+            <strong>Detection Rules</strong>
+            <div class="mini muted">Signed content packs • Hot reload</div>
+          </div>
+          <button class="btn" id="reload" title="Reload rules (r)">Reload</button>
+        </div>
+        <div class="bd">
+          <div class="search" title="Search rules (/)">
+            <span class="icon">🔎</span>
+            <input id="rule-search" placeholder="Search by name or ATT&CK technique">
+          </div>
+          <div id="rules" class="list"></div>
+        </div>
+      </div>
+
+      <!-- Events (full width) -->
+      <div class="card" style="grid-column: 1 / -1" id="panel-events">
+        <div class="hd row" style="justify-content:space-between">
+          <div>
+            <strong>Event Stream</strong>
+            <div class="mini muted">Live telemetry (filter: a/i/w/e)</div>
+          </div>
+          <div class="row mini">
+            <button class="btn" data-filter="all">All</button>
+            <button class="btn" data-filter="info">Info</button>
+            <button class="btn" data-filter="warning">Warn</button>
+            <button class="btn" data-filter="error">Error</button>
+          </div>
+        </div>
+        <div class="bd">
+          <div id="events" class="event-stream monospace" aria-live="polite"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Help overlay -->
+  <div class="help" id="help">
+    <div class="box">
+      <h2 style="margin:0 0 8px 0">Mission Control — Help</h2>
+      <div class="muted" style="margin-bottom:12px">Engineer’s Dashboard (Pilot MVP)</div>
+      <div class="grid" style="grid-template-columns:1fr 1fr;gap:8px">
+        <div>
+          <h3>Keyboard</h3>
+          <p class="mini">
+            <span class="kbd">?</span> toggle help •
+            <span class="kbd">g</span> Episodes •
+            <span class="kbd">f</span> Fleet •
+            <span class="kbd">r</span> Rules •
+            <span class="kbd">e</span> Events •
+            <span class="kbd">/</span> Search rules •
+            <span class="kbd">1</span>/<span class="kbd">2</span> approvals •
+            <span class="kbd">Enter</span> engage
+          </p>
+          <h3>Transports & Status</h3>
+          <p class="mini">WebSocket <span class="monospace">/ws</span> (<code>?ws=ws://host:8000/ws</code> to override). Green dot = connected.</p>
+          <h3>Kill Switch</h3>
+          <p class="mini">Two approvals required; auto-reverts on TTL expiry. All actions audited by backend.</p>
+        </div>
+        <div>
+          <h3>Panels</h3>
+          <ul class="mini">
+            <li><b>Episodes:</b> live detections, containment, resolution; timeline shows sequence.</li>
+            <li><b>Fleet:</b> node health and budgets (CPU/MB).</li>
+            <li><b>Rules:</b> signed packs, enable/disable; hot reload.</li>
+            <li><b>Events:</b> real-time logs with level filter.</li>
+          </ul>
+          <div class="hr"></div>
+          <p class="mini">This pilot UI favors function over form. Send feedback via <span class="monospace">POST /api/feedback</span>.</p>
+        </div>
+      </div>
+      <div style="text-align:right;margin-top:10px"><button class="btn" id="close-help">Close</button></div>
+    </div>
+  </div>
+
+  <script>
+  // ---------- Utilities ----------
+  const $ = (sel) => document.querySelector(sel);
+  const el = (tag, cls, text) => { const n = document.createElement(tag); if(cls) n.className = cls; if(text!=null) n.textContent = text; return n; };
+  function fmtTime() { const d=new Date(); return d.toLocaleString(); }
+  function byId(id){ return document.getElementById(id); }
+
+  const state = {
+    connected: false,
+    episodes: {},   // id -> obj
+    fleet: { total:0, healthy:0, avg_cpu:0, avg_memory:0, nodes:[] },
+    rules: [],
+    events: [],
+    kill: { engaged:false, approvals:[false,false], ttl:300 }
+  };
+
+  // ---------- Clock ----------
+  setInterval(()=>{ byId('clock').textContent = fmtTime(); }, 1000);
+  byId('clock').textContent = fmtTime();
+
+  // ---------- WebSocket ----------
+  const urlParams = new URLSearchParams(location.search);
+  const WS_URL = urlParams.get('ws') || 'ws://localhost:8000/ws';
+  let ws;
+  function connectWS(){
+    try{
+      ws = new WebSocket(WS_URL);
+      ws.onopen = () => setConn(true);
+      ws.onclose = () => { setConn(false); setTimeout(connectWS, 1500); };
+      ws.onerror = () => {};
+      ws.onmessage = (ev) => {
+        try{ const data = JSON.parse(ev.data); handleMsg(data); }
+        catch{}
+      };
+    }catch(e){ setConn(false); }
+  }
+  connectWS();
+
+  function setConn(ok){
+    state.connected = ok;
+    byId('conn-dot').className = 'dot ' + (ok ? 'ok' : 'warn');
+    byId('conn-state').textContent = ok ? 'Connected' : 'Demo Mode';
+    if(!ok){ startDemo(); }
+  }
+
+  // ---------- Demo feed (when WS down) ----------
+  let demoTimer;
+  function startDemo(){
+    clearInterval(demoTimer);
+    demoTimer = setInterval(()=>{
+      const now = new Date().toISOString();
+      // event
+      const levels = ['info','warning','error'];
+      const level = levels[Math.floor(Math.random()*3)];
+      handleMsg({type:'event', level, message:`${level.toUpperCase()}: heartbeat ${now}`});
+      // episode
+      if(Math.random()<0.5){
+        const st = ['detected','running','contained','resolved'][Math.floor(Math.random()*4)];
+        handleMsg({type:'episode', id:`ep-${1+Math.floor(Math.random()*4)}`, attacklet_name:'data-exfiltration', status:st, ttd_seconds: +(Math.random()*0.3).toFixed(3), score: Math.floor(Math.random()*100), started_at: new Date(Date.now()-Math.random()*600000).toISOString(), technique:'T1041'});
+      }
+      // fleet
+      const nodes = Array.from({length:12}).map((_,i)=>{
+        const r = Math.random(); return { name:`node-${i+1}`, status: r>0.92?'failed': r>0.75?'degraded':'healthy', cpu:+(0.5+Math.random()*2.5).toFixed(1), memory: Math.floor(14+Math.random()*12)};
+      });
+      handleMsg({type:'fleet_status', total:nodes.length, healthy:nodes.filter(n=>n.status==='healthy').length, avg_cpu:+(nodes.reduce((a,n)=>a+n.cpu,0)/nodes.length).toFixed(1), avg_memory: Math.floor(nodes.reduce((a,n)=>a+n.memory,0)/nodes.length), nodes});
+      // rules occasional
+      if(state.rules.length===0 || Math.random()<0.2){
+        handleMsg({type:'rules_update', rules:[
+          {id:'r1', name:'Privilege Escalation', severity:'critical', technique:'T1068', threshold:0.95, enabled:true, version:'1.2.0'},
+          {id:'r2', name:'Data Exfiltration', severity:'high', technique:'T1041', threshold:0.90, enabled:true, version:'2.0.1'},
+          {id:'r3', name:'Lateral Movement', severity:'high', technique:'T1021', threshold:0.85, enabled:true, version:'1.7.3'},
+          {id:'r4', name:'Command & Control', severity:'critical', technique:'T1071', threshold:0.92, enabled:true, version:'3.0.0'},
+          {id:'r5', name:'Persistence', severity:'medium', technique:'T1136', threshold:0.80, enabled:false, version:'0.9.5'}
+        ]});
+      }
+    }, 1500);
+  }
+
+  // ---------- Message handling ----------
+  function handleMsg(d){
+    switch(d.type){
+      case 'event': state.events.unshift({ts:new Date().toLocaleTimeString(), level:d.level||'info', message:d.message}); state.events = state.events.slice(0,500); renderEvents(); break;
+      case 'episode': state.episodes[d.id] = d; renderEpisodes(); renderTimeline(); break;
+      case 'fleet_status': state.fleet = { total:d.total||0, healthy:d.healthy||0, avg_cpu:d.avg_cpu||0, avg_memory:d.avg_memory||0, nodes:d.nodes||[] }; renderFleet(); break;
+      case 'rules_update': state.rules = d.rules||[]; renderRules(); break;
+      case 'kill_switch': state.kill.engaged=!!d.engaged; state.kill.approvals=[!!(d.approvals?.[0]), !!(d.approvals?.[1])]; renderKill(); break;
+    }
+  }
+
+  // ---------- Renderers ----------
+  function renderEvents(filter){
+    const cont = byId('events');
+    cont.innerHTML = '';
+    const f = filter || byId('panel-events').dataset.filter || 'all';
+    state.events.filter(e => f==='all' ? true : e.level===f).forEach(e=>{
+      const div = el('div','event '+e.level,`[${e.ts}] ${e.message}`);
+      cont.appendChild(div);
+    });
+  }
+  // filter buttons
+  document.querySelectorAll('#panel-events [data-filter]').forEach(b=>{
+    b.addEventListener('click',()=>{ byId('panel-events').dataset.filter = b.dataset.filter; renderEvents(); });
+  });
+
+  function renderKill(){
+    byId('op1').checked = state.kill.approvals[0];
+    byId('op2').checked = state.kill.approvals[1];
+    byId('engage').disabled = !(state.kill.approvals[0] && state.kill.approvals[1]) || state.kill.engaged;
+    byId('kill-pill').textContent = state.kill.engaged ? 'KILL SWITCH ENGAGED' : 'SYSTEM ARMED';
+    byId('kill-pill').style.background = state.kill.engaged ? '#200d0d' : '#0a1628';
+    byId('kill-pill').style.borderColor = state.kill.engaged ? '#7f1d1d' : 'var(--border)';
+  }
+  renderKill();
+  // approvals
+  byId('op1').addEventListener('change', e=>{ state.kill.approvals[0]=e.target.checked; renderKill(); });
+  byId('op2').addEventListener('change', e=>{ state.kill.approvals[1]=e.target.checked; renderKill(); });
+  byId('engage').addEventListener('click', ()=>{
+    if(!(state.kill.approvals[0]&&state.kill.approvals[1])) return;
+    state.kill.engaged = true; renderKill();
+    // start TTL
+    let left = state.kill.ttl;
+    byId('ttl').textContent = left+'s';
+    const id = setInterval(()=>{
+      left = Math.max(0, left-1);
+      byId('ttl').textContent = left+'s';
+      if(left===0){ clearInterval(id); state.kill.engaged=false; renderKill(); byId('ttl').textContent = state.kill.ttl+'s'; }
+    },1000);
+    // notify backend
+    try{ ws?.send(JSON.stringify({type:'kill_switch', engaged:true})); }catch{}
+  });
+
+  function sevBadge(sev){
+    const s = (sev||'low').toLowerCase();
+    const map = {critical:'crit', high:'high', medium:'med', low:'low'};
+    const cls = map[s] || 'low';
+    return `<span class="badge ${cls}">${sev||'low'}</span>`;
+  }
+
+  function renderEpisodes(){
+    const list = Object.values(state.episodes).sort((a,b)=> (b.started_at||'').localeCompare(a.started_at||''));
+    const cont = byId('episodes'); cont.innerHTML='';
+    if(list.length===0){ cont.appendChild(el('div','mini muted','No episodes yet.')); return; }
+    list.forEach(e=>{
+      const row = el('div','episode');
+      const top = el('div','top');
+      const left = el('div',null);
+      left.innerHTML = `<div style="font-weight:600">${e.attacklet_name}</div><div class="mini muted">${e.technique||''}</div>`;
+      const right = el('div',null);
+      right.innerHTML = `<span class="pill status-${e.status}">${e.status}</span>`;
+      top.append(left,right); row.appendChild(top);
+      const meta = el('div','mini muted',`TTD ${e.ttd_seconds ?? '-'}s • Score ${e.score ?? 0}`);
+      row.appendChild(meta);
+      cont.appendChild(row);
+    });
+  }
+
+  function renderFleet(){
+    byId('f-total').textContent = state.fleet.total;
+    byId('f-healthy').textContent = state.fleet.healthy;
+    byId('f-cpu').textContent = state.fleet.avg_cpu + '%';
+    byId('f-mem').textContent = state.fleet.avg_memory + 'MB';
+    const cont = byId('fleet'); cont.innerHTML='';
+    state.fleet.nodes.forEach(n=>{
+      const item = el('div','row',null);
+      item.style.justifyContent='space-between'; item.style.border='1px solid var(--border)'; item.style.borderRadius='8px'; item.style.padding='6px 8px';
+      const left = el('div',null, n.name);
+      const right = el('div','mini muted', `${n.cpu}% • ${n.memory}MB`);
+      const dot = el('span','dot '+(n.status==='healthy'?'ok':(n.status==='degraded'?'warn':'crit')),''); dot.style.marginRight='6px';
+      const wrapL = el('div','row',null); wrapL.append(dot,left);
+      item.prepend(wrapL); item.append(right); cont.appendChild(item);
+    });
+  }
+
+  function renderRules(){
+    const q = byId('rule-search').value.toLowerCase();
+    const cont = byId('rules'); cont.innerHTML='';
+    state.rules.filter(r => r.name.toLowerCase().includes(q) || (r.technique||'').toLowerCase().includes(q))
+      .forEach(r=>{
+        const row = el('div','row',null);
+        row.style.justifyContent='space-between'; row.style.border='1px solid var(--border)'; row.style.borderRadius='8px'; row.style.padding='6px 8px';
+        const L = el('div',null); L.innerHTML = `${sevBadge(r.severity)} <b>${r.name}</b><div class="mini muted">${r.technique||''} • v${r.version||'-'}</div>`;
+        const R = el('div','row',null);
+        const thr = el('div','mini muted',`thr ${r.threshold ?? '-'}`);
+        const sw = el('input'); sw.type='checkbox'; sw.checked = !!r.enabled; sw.title = 'Enable/disable';
+        sw.addEventListener('change', ()=>{ r.enabled = sw.checked; try{ ws?.send(JSON.stringify({type:'rule_set', id:r.id, enabled:r.enabled})); }catch{} });
+        R.append(thr, sw);
+        row.append(L,R); cont.appendChild(row);
+      });
+    if(cont.innerHTML===''){ cont.appendChild(el('div','mini muted','No matching rules.')); }
+  }
+  byId('reload').addEventListener('click',()=>{ try{ ws?.send(JSON.stringify({type:'rules_reload'})); }catch{} });
+
+  byId('rule-search').addEventListener('input', renderRules);
+
+  // ---------- Timeline (simple SVG) ----------
+  function renderTimeline(){
+    const tl = byId('timeline'); tl.innerHTML='';
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNS,'svg');
+    svg.setAttribute('width','100%'); svg.setAttribute('height','120'); svg.style.display='block';
+    tl.appendChild(svg);
+    const eps = Object.values(state.episodes);
+    if(eps.length===0){ const cap = el('div','mini muted','Timeline will appear when episodes are present.'); cap.style.padding='8px'; tl.appendChild(cap); return; }
+    const times = eps.map(e=> new Date(e.started_at||Date.now()).getTime());
+    const minT = Math.min.apply(null, times); const maxT = Math.max.apply(null, times) + 60000;
+    function x(t){ const w = tl.clientWidth || 600; return 20 + (w-40) * ((t-minT)/(maxT-minT)); }
+    // axis
+    const axis = document.createElementNS(svgNS,'line'); axis.setAttribute('x1','20'); axis.setAttribute('y1','60'); axis.setAttribute('x2','98%'); axis.setAttribute('y2','60'); axis.setAttribute('stroke','#1e293b'); axis.setAttribute('stroke-width','2'); svg.appendChild(axis);
+    // markers
+    eps.forEach((e,i)=>{
+      const t = new Date(e.started_at||Date.now()).getTime();
+      const cx = x(t); const cy = 60;
+      const color = e.status==='resolved' ? '#93c5fd' : e.status==='contained' ? '#67e8f9' : e.status==='running' ? '#fde68a' : e.status==='failed' ? '#fda4af' : '#6ee7b7';
+      const g = document.createElementNS(svgNS,'g');
+      const circ = document.createElementNS(svgNS,'circle'); circ.setAttribute('cx',cx); circ.setAttribute('cy',cy); circ.setAttribute('r','6'); circ.setAttribute('fill',color); g.appendChild(circ);
+      const lbl = document.createElementNS(svgNS,'text'); lbl.setAttribute('x',cx+8); lbl.setAttribute('y',cy-10); lbl.setAttribute('fill','#9aa4b2'); lbl.setAttribute('font-size','10'); lbl.textContent = (e.technique||'') + ' ' + (e.status||''); g.appendChild(lbl);
+      g.addEventListener('mouseenter', (ev)=> showTip(ev, `${e.attacklet_name}<br><span class='mini muted'>${e.technique||''}</span><br>status <b>${e.status}</b><br>TTD ${e.ttd_seconds ?? '-'}s • score ${e.score ?? 0}`));
+      g.addEventListener('mouseleave', hideTip);
+      g.addEventListener('click', ()=> alert(`${e.attacklet_name} — ${e.status}\nTechnique ${e.technique || ''}\nTTD ${e.ttd_seconds ?? '-'}s • Score ${e.score ?? 0}`));
+      svg.appendChild(g);
+    });
+  }
+  const tip = byId('tt');
+  function showTip(ev, html){ tip.innerHTML = html; tip.style.display='block'; tip.style.left = (ev.pageX+10)+'px'; tip.style.top = (ev.pageY-10)+'px'; }
+  function hideTip(){ tip.style.display='none'; }
+
+  // ---------- Keyboard shortcuts ----------
+  const panels = ['episodes','fleet','rules','events'];
+  function focusPanel(name){ $('#panel-'+name).scrollIntoView({behavior:'smooth', block:'start'}); }
+  window.addEventListener('keydown',(e)=>{
+    if(e.key==='?'){ e.preventDefault(); toggleHelp(); }
+    if(e.key==='g'){ focusPanel('episodes'); }
+    if(e.key==='f'){ focusPanel('fleet'); }
+    if(e.key==='r'){ focusPanel('rules'); }
+    if(e.key==='e'){ focusPanel('events'); }
+    if(e.key==='/'){ e.preventDefault(); byId('rule-search').focus(); }
+    if(e.key==='1'){ byId('op1').click(); }
+    if(e.key==='2'){ byId('op2').click(); }
+    if(e.key==='Enter'){ if(!byId('engage').disabled) byId('engage').click(); }
+    if(e.key==='a'){ byId('panel-events').dataset.filter='all'; renderEvents(); }
+    if(e.key==='i'){ byId('panel-events').dataset.filter='info'; renderEvents(); }
+    if(e.key==='w'){ byId('panel-events').dataset.filter='warning'; renderEvents(); }
+    if(e.key==='e'){ byId('panel-events').dataset.filter='error'; renderEvents(); }
+  });
+
+  function toggleHelp(){ const h = byId('help'); h.style.display = (h.style.display==='flex') ? 'none' : 'flex'; if(h.style.display==='') h.style.display='flex'; }
+  byId('close-help').addEventListener('click', toggleHelp);
+
+  // initial renders
+  renderEvents(); renderEpisodes(); renderFleet(); renderRules(); renderTimeline();
+  </script>
+</body>
+</html>
+"""
+
+# --- 2) backend_v1.py (FastAPI skeleton with WS + Prometheus proxy) ---
+backend = r'''"""
+A-SWARM backend_v1.py — minimal dev server for Mission Control (pilot MVP)
+- Serves static dashboard (mission_control_pro.html)
+- WebSocket endpoint /ws for real-time events
+- Prometheus proxy /api/promql?q=... (optional; set PROM_URL env var)
+- Demo generator when ASWARM_DEMO=1
+"""
+import asyncio, json, os, time
+from typing import Optional
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
+import httpx
+
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+DASHBOARD = os.path.join(APP_DIR, "mission_control_pro.html")
+PROM_URL = os.getenv("PROM_URL", "").rstrip("/")
+DEMO = os.getenv("ASWARM_DEMO", "1") == "1"
+
+app = FastAPI(title="A-SWARM Backend v1")
+
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    return FileResponse(DASHBOARD)
+
+@app.get("/mission_control.html", response_class=HTMLResponse)
+async def mc():
+    return FileResponse(DASHBOARD)
+
+@app.get("/healthz")
+async def health():
+    return {"ok": True, "ts": time.time()}
+
+@app.get("/api/promql")
+async def promql(q: str, time_: Optional[float] = None):
+    if not PROM_URL:
+        return JSONResponse({"error": "PROM_URL not set"}, status_code=400)
+    params = {"query": q}
+    if time_ is not None:
+        params["time"] = str(time_)
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        r = await client.get(f"{PROM_URL}/api/v1/query", params=params)
+        return JSONResponse(r.json())
+
+# --- WebSocket hub ---
+class Hub:
+    def __init__(self):
+        self.clients = set()
+
+    async def connect(self, ws: WebSocket):
+        await ws.accept()
+        self.clients.add(ws)
+
+    def disconnect(self, ws: WebSocket):
+        self.clients.discard(ws)
+
+    async def broadcast(self, msg: dict):
+        dead = []
+        for ws in list(self.clients):
+            try:
+                await ws.send_text(json.dumps(msg))
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.disconnect(ws)
+
+hub = Hub()
+
+@app.websocket("/ws")
+async def ws(ws: WebSocket):
+    await hub.connect(ws)
+    try:
+        # Send hello
+        await ws.send_text(json.dumps({"type": "event", "level":"info", "message": "CONNECTED to A-SWARM backend_v1"}))
+        if DEMO:
+            # start a demo task per connection
+            async def demo():
+                import random, datetime
+                while True:
+                    now = datetime.datetime.utcnow().isoformat() + "Z"
+                    # events
+                    level = random.choice(["info","warning","error"])
+                    await hub.broadcast({"type":"event","level":level,"message":f"{level.upper()}: heartbeat {now}"})
+                    # episodes
+                    if random.random()<0.5:
+                        status=random.choice(["detected","running","contained","resolved"])
+                        await hub.broadcast({
+                            "type":"episode","id":f"ep-{random.randint(1,4)}","attacklet_name":"data-exfiltration",
+                            "status":status,"ttd_seconds": round(random.random()*0.3,3),"score": random.randint(0,99),
+                            "started_at": now, "technique":"T1041"
+                        })
+                    # fleet
+                    nodes=[]; healthy=0; cpu_sum=0; mem_sum=0
+                    for i in range(12):
+                        r=random.random(); status = "failed" if r>0.92 else "degraded" if r>0.75 else "healthy"
+                        if status=="healthy": healthy+=1
+                        cpu= round(0.5+random.random()*2.5,1); mem = int(14+random.random()*12)
+                        nodes.append({"name":f"node-{i+1}","status":status,"cpu":cpu,"memory":mem})
+                        cpu_sum+=cpu; mem_sum+=mem
+                    await hub.broadcast({"type":"fleet_status","total":len(nodes),"healthy":healthy,"avg_cpu": round(cpu_sum/len(nodes),1),"avg_memory": int(mem_sum/len(nodes)),"nodes":nodes})
+                    await asyncio.sleep(1.5)
+            task = asyncio.create_task(demo())
+        while True:
+            msg = await ws.receive_text()
+            try:
+                data = json.loads(msg)
+            except Exception:
+                continue
+            # Simple command echo/ack
+            if data.get("type") == "rules_reload":
+                await hub.broadcast({"type":"event","level":"info","message":"Rules reload requested"})
+            if data.get("type") == "rule_set":
+                rid = data.get("id")
+                await hub.broadcast({"type":"event","level":"info","message":f"Rule {rid} set enabled={data.get('enabled')}"})
+            if data.get("type") == "kill_switch":
+                await hub.broadcast({"type":"event","level":"warning","message":"KILL SWITCH engaged (pilot demo)"})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        hub.disconnect(ws)
+        # no cleanup for demo task (per-connection) to keep example simple
+
+# Static directory (optional /dashboard mount if you have assets)
+app.mount("/dashboard", StaticFiles(directory=os.path.dirname(DASHBOARD)), name="dashboard")
+
+# Run: uvicorn backend_v1:app --host 0.0.0.0 --port 8000
+'''
+
+# --- 3) serve_mission_control.sh ---
+sh = r"""#!/usr/bin/env bash
+set -euo pipefail
+
+# serve_mission_control.sh — quick pilot launcher
+# Requirements: kubectl (optional if port-forwarding), python3, uvicorn, fastapi, httpx
+
+port_forward_pid=""
+http_pid=""
+cleanup() {
+  [[ -n "${port_forward_pid}" ]] && kill "${port_forward_pid}" >/dev/null 2>&1 || true
+  [[ -n "${http_pid}" ]] && kill "${http_pid}" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+# Optional: port-forward the backend service (if you're running the API in-cluster)
+if kubectl get svc aswarm-api >/dev/null 2>&1; then
+  echo "[*] Port-forwarding svc/aswarm-api -> localhost:8000"
+  kubectl port-forward svc/aswarm-api 8000:8000 >/dev/null 2>&1 &
+  port_forward_pid=$!
+  sleep 2
+else
+  echo "[*] No svc/aswarm-api found; starting local backend."
+  # Start local FastAPI backend if uvicorn is present
+  if command -v uvicorn >/dev/null 2>&1; then
+    ASWARM_DEMO=1 uvicorn backend_v1:app --host 0.0.0.0 --port 8000 >/dev/null 2>&1 &
+    http_pid=$!
+    sleep 1
+  else
+    echo "[-] uvicorn not found. Install with: pip install fastapi uvicorn httpx"
+  fi
+fi
+
+echo "[✓] Mission Control ready: http://localhost:8000/mission_control.html"
+if command -v xdg-open >/dev/null 2>&1; then xdg-open "http://localhost:8000/mission_control.html" || true; fi
+if [[ "$OSTYPE" == "darwin"* ]]; then open "http://localhost:8000/mission_control.html" || true; fi
+wait
+"""
+
+# --- 4) Operator Guide (HTML for print-to-PDF) ---
+guide = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>A-SWARM Mission Control — Operator Guide (Pilot)</title>
+<style>
+  body{font-family:Inter,ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial;line-height:1.5;margin:40px;color:#0b1220}
+  h1,h2{margin:0 0 8px 0}
+  h1{font-size:26px} h2{font-size:18px;margin-top:18px}
+  code,pre{font-family:ui-monospace,Menlo,Consolas,monospace;background:#f3f4f6;padding:2px 4px;border-radius:4px}
+  .muted{color:#6b7280}
+  .kpi{display:flex;gap:16px;flex-wrap:wrap}
+  .box{border:1px solid #e5e7eb;border-radius:8px;padding:10px;background:#fafafa}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .callout{border-left:4px solid #34d399;padding:8px 12px;background:#ecfdf5}
+</style>
+</head>
+<body>
+<h1>A-SWARM Mission Control — Operator Guide (Pilot)</h1>
+<div class="muted">Version: Pilot MVP • This guide fits on two printed pages.</div>
+
+<h2>1) What this dashboard does</h2>
+<p>Mission Control provides real-time visibility and safe operator controls for A-SWARM. It shows active episodes, fleet health, rules status, and streaming events. A two-person governed kill switch is available for emergencies with TTL auto-revert.</p>
+
+<div class="grid">
+  <div class="box">
+    <h2>Panels</h2>
+    <ul>
+      <li><b>Episodes</b> — live detections/containment; clickable timeline.</li>
+      <li><b>Fleet</b> — node health & resource budgets.</li>
+      <li><b>Rules</b> — signed content packs; enable/disable.</li>
+      <li><b>Events</b> — real-time logs with level filter.</li>
+    </ul>
+  </div>
+  <div class="box">
+    <h2>Keyboard shortcuts

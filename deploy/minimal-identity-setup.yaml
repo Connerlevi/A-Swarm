@@ -1,0 +1,146 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aswarm
+  labels:
+    app.kubernetes.io/name: aswarm
+---
+# Service Accounts for components (match the SPIFFE SA segment)
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: aswarm-pheromone, namespace: aswarm}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: aswarm-sentinel, namespace: aswarm}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: aswarm-redswarm, namespace: aswarm}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: aswarm-blueswarm, namespace: aswarm}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: aswarm-cert-generator, namespace: aswarm}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: aswarm-cert-generator, namespace: aswarm}
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get","create","update","patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: aswarm-cert-generator, namespace: aswarm}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: aswarm-cert-generator
+subjects:
+- kind: ServiceAccount
+  name: aswarm-cert-generator
+  namespace: aswarm
+---
+# Job that generates a CA + per-component leaf certs with SPIFFE URI SANs,
+# then upserts them into secrets.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: aswarm-cert-generator
+  namespace: aswarm
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 120
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: aswarm-cert-generator
+      containers:
+      - name: cert-gen
+        image: bitnami/kubectl:latest # includes kubectl + busybox
+        command: ["/bin/sh","-c"]
+        args:
+        - |
+          set -euo pipefail
+
+          # tools
+          apk add --no-cache openssl >/dev/null
+
+          mkdir -p /certs && cd /certs
+
+          # --- CA with proper v3 extensions ---
+          cat > ca.conf <<'EOF'
+          [req]
+          distinguished_name = dn
+          x509_extensions = v3_ca
+          prompt = no
+          [dn]
+          CN = A-SWARM Dev CA
+          O = A-SWARM Security
+          [v3_ca]
+          basicConstraints = critical, CA:true
+          keyUsage = critical, keyCertSign, cRLSign
+          subjectKeyIdentifier = hash
+          authorityKeyIdentifier = keyid:always,issuer
+          EOF
+
+          echo "Generating CA..."
+          openssl genrsa -out ca-key.pem 4096
+          openssl req -new -x509 -days 365 -key ca-key.pem -out ca-cert.pem -config ca.conf
+
+          gen_cert() {
+            component="$1"
+            spiffe_id="spiffe://aswarm.local/ns/aswarm/sa/aswarm-${component}"
+
+            cat > "${component}.conf" <<EOF
+          [req]
+          distinguished_name = dn
+          req_extensions = v3_req
+          prompt = no
+          [dn]
+          CN = ${component}.aswarm.svc.cluster.local
+          O = A-SWARM Security
+          OU = A-SWARM Protocol V4
+          [v3_req]
+          basicConstraints = CA:false
+          keyUsage = critical, digitalSignature, keyEncipherment, dataEncipherment
+          extendedKeyUsage = serverAuth, clientAuth
+          subjectAltName = @alt
+          [alt]
+          DNS.1 = ${component}
+          DNS.2 = ${component}.aswarm
+          DNS.3 = ${component}.aswarm.svc
+          DNS.4 = ${component}.aswarm.svc.cluster.local
+          URI.1 = ${spiffe_id}
+          EOF
+
+            echo "Generating leaf for ${component} (${spiffe_id})..."
+            openssl genrsa -out ${component}-key.pem 2048
+            openssl req -new -key ${component}-key.pem -out ${component}.csr -config ${component}.conf
+            openssl x509 -req -days 365 -in ${component}.csr \
+              -CA ca-cert.pem -CAkey ca-key.pem -CAcreateserial \
+              -out ${component}-cert.pem -extensions v3_req -extfile ${component}.conf
+
+            # Idempotent secret upserts
+            kubectl create secret tls ${component}-tls \
+              --cert=${component}-cert.pem --key=${component}-key.pem \
+              -n aswarm --dry-run=client -o yaml | kubectl apply -f -
+          }
+
+          gen_cert "pheromone"
+          gen_cert "sentinel"
+          gen_cert "redswarm"
+          gen_cert "blueswarm"
+
+          # CA secret (for peer validation)
+          kubectl create secret generic aswarm-ca \
+            --from-file=ca.crt=ca-cert.pem -n aswarm \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          echo "Done. Secrets:"
+          kubectl get secrets -n aswarm | grep -E 'tls|aswarm-ca'

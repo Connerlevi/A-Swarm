@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>A-SWARM Mission Control v0.1</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: 'Courier New', monospace; 
+            background: #0a0a0a; 
+            color: #00ff00;
+            overflow: hidden;
+        }
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: 60px 1fr 1fr 200px;
+            height: 100vh;
+            gap: 2px;
+            background: #1a1a1a;
+            padding: 2px;
+        }
+        .header {
+            grid-column: 1 / -1;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+            background: linear-gradient(90deg, #1a1a1a, #0a0a0a);
+            border-bottom: 2px solid #00ff00;
+        }
+        .panel {
+            background: #0a0a0a;
+            border: 1px solid #00ff00;
+            padding: 10px;
+            overflow: auto;
+            position: relative;
+        }
+        .panel-title {
+            color: #00ff00;
+            font-size: 12px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            border-bottom: 1px solid #00ff00;
+            padding-bottom: 5px;
+        }
+        .kill-switch {
+            grid-column: 1;
+            grid-row: 2;
+        }
+        .episodes {
+            grid-column: 2;
+            grid-row: 2;
+        }
+        .fleet-status {
+            grid-column: 1;
+            grid-row: 3;
+        }
+        .detection-rules {
+            grid-column: 2;
+            grid-row: 3;
+        }
+        .event-stream {
+            grid-column: 1 / -1;
+            grid-row: 4;
+            font-size: 11px;
+            font-family: 'Courier New', monospace;
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+        .status-ok { background: #00ff00; box-shadow: 0 0 10px #00ff00; }
+        .status-warning { background: #ffff00; box-shadow: 0 0 10px #ffff00; }
+        .status-critical { background: #ff0000; box-shadow: 0 0 10px #ff0000; }
+        .status-unknown { background: #666666; }
+        
+        .kill-switch-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        .kill-switch-status {
+            padding: 10px;
+            border: 2px solid #00ff00;
+            text-align: center;
+            font-size: 18px;
+        }
+        .kill-switch-status.engaged {
+            border-color: #ff0000;
+            color: #ff0000;
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .two-man-rule {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        .approval-slot {
+            padding: 10px;
+            border: 1px dashed #666;
+            text-align: center;
+            font-size: 11px;
+        }
+        .approval-slot.approved {
+            border-color: #00ff00;
+            background: rgba(0, 255, 0, 0.1);
+        }
+        
+        .episode-entry {
+            padding: 5px;
+            margin-bottom: 5px;
+            border-left: 3px solid #666;
+            font-size: 11px;
+        }
+        .episode-entry.detected { border-color: #00ff00; }
+        .episode-entry.running { border-color: #ffff00; }
+        .episode-entry.failed { border-color: #ff0000; }
+        
+        .metric {
+            display: inline-block;
+            margin: 5px 10px;
+            font-size: 11px;
+        }
+        .metric-value {
+            color: #00ffff;
+            font-weight: bold;
+        }
+        
+        .event-line {
+            padding: 2px 5px;
+            border-bottom: 1px solid #111;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .event-line.error { color: #ff0000; }
+        .event-line.warning { color: #ffff00; }
+        .event-line.info { color: #00ff00; }
+        
+        .control-button {
+            background: #1a1a1a;
+            border: 1px solid #00ff00;
+            color: #00ff00;
+            padding: 5px 15px;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+            text-transform: uppercase;
+            font-size: 11px;
+        }
+        .control-button:hover {
+            background: #00ff00;
+            color: #0a0a0a;
+        }
+        .control-button.danger {
+            border-color: #ff0000;
+            color: #ff0000;
+        }
+        .control-button.danger:hover {
+            background: #ff0000;
+            color: #0a0a0a;
+        }
+        
+        #connectionStatus {
+            font-size: 11px;
+            text-transform: uppercase;
+        }
+        
+        .fleet-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 5px;
+            font-size: 10px;
+        }
+        .sentinel-node {
+            padding: 5px;
+            border: 1px solid #333;
+            text-align: center;
+        }
+        .sentinel-node.healthy { border-color: #00ff00; }
+        .sentinel-node.degraded { border-color: #ffff00; }
+        .sentinel-node.failed { border-color: #ff0000; }
+        
+        .rules-list {
+            font-size: 11px;
+        }
+        .rule-item {
+            padding: 5px;
+            margin-bottom: 5px;
+            border: 1px solid #333;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .rule-severity-critical { border-left: 3px solid #ff0000; }
+        .rule-severity-high { border-left: 3px solid #ff9900; }
+        .rule-severity-medium { border-left: 3px solid #ffff00; }
+        .rule-severity-low { border-left: 3px solid #00ff00; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div>
+                <h1 style="font-size: 24px; letter-spacing: 3px;">A-SWARM MISSION CONTROL</h1>
+                <div style="font-size: 11px; color: #666;">Protocol V4 | Zero-Compromise Edition</div>
+            </div>
+            <div style="text-align: right;">
+                <div id="connectionStatus">
+                    <span class="status-indicator status-unknown"></span>
+                    <span id="wsStatus">DISCONNECTED</span>
+                </div>
+                <div style="font-size: 11px; color: #666;" id="timestamp"></div>
+            </div>
+        </div>
+        
+        <div class="panel kill-switch">
+            <div class="panel-title">🔴 Kill Switch Governance</div>
+            <div class="kill-switch-panel">
+                <div class="kill-switch-status" id="killSwitchStatus">
+                    SYSTEM ARMED
+                </div>
+                <div class="two-man-rule">
+                    <div class="approval-slot" id="approval1">
+                        <div>Operator 1</div>
+                        <div style="color: #666">Not Approved</div>
+                    </div>
+                    <div class="approval-slot" id="approval2">
+                        <div>Operator 2</div>
+                        <div style="color: #666">Not Approved</div>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 10px; justify-content: center;">
+                    <button class="control-button" onclick="requestApproval()">REQUEST APPROVAL</button>
+                    <button class="control-button danger" onclick="engageKillSwitch()">ENGAGE</button>
+                </div>
+                <div style="margin-top: 15px; padding: 10px; border: 1px solid #333;">
+                    <div style="font-size: 10px; color: #666;">TTL AUTO-REVERT</div>
+                    <div style="font-size: 14px; color: #00ffff;">300s</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="panel episodes">
+            <div class="panel-title">🎯 Red/Blue Episodes</div>
+            <div id="episodesList">
+                <div class="metric">
+                    <span>MTTD:</span> <span class="metric-value">0.08ms</span>
+                </div>
+                <div class="metric">
+                    <span>MTTR:</span> <span class="metric-value">1.3s</span>
+                </div>
+                <div class="metric">
+                    <span>Detection Rate:</span> <span class="metric-value">100%</span>
+                </div>
+                <div style="margin-top: 15px;" id="episodesContainer"></div>
+            </div>
+        </div>
+        
+        <div class="panel fleet-status">
+            <div class="panel-title">🛸 Fleet Status</div>
+            <div>
+                <div class="metric">
+                    <span>Sentinels:</span> <span class="metric-value" id="sentinelCount">0</span>
+                </div>
+                <div class="metric">
+                    <span>Healthy:</span> <span class="metric-value" id="healthyCount">0</span>
+                </div>
+                <div class="metric">
+                    <span>CPU:</span> <span class="metric-value" id="cpuUsage">0.8%</span>
+                </div>
+                <div class="metric">
+                    <span>Memory:</span> <span class="metric-value" id="memUsage">18MB</span>
+                </div>
+            </div>
+            <div class="fleet-grid" id="fleetGrid" style="margin-top: 15px;"></div>
+        </div>
+        
+        <div class="panel detection-rules">
+            <div class="panel-title">📋 Detection Rules</div>
+            <div style="margin-bottom: 10px;">
+                <button class="control-button" onclick="reloadRules()">RELOAD RULES</button>
+                <span style="margin-left: 10px; font-size: 11px;">
+                    Last Update: <span id="rulesUpdate" style="color: #00ffff;">Never</span>
+                </span>
+            </div>
+            <div class="rules-list" id="rulesList"></div>
+        </div>
+        
+        <div class="panel event-stream">
+            <div class="panel-title">📡 Event Stream</div>
+            <div id="eventStream" style="height: calc(100% - 30px); overflow-y: auto;"></div>
+        </div>
+    </div>
+    
+    <script>
+        // WebSocket connection to backend API
+        let ws = null;
+        let reconnectTimer = null;
+        const API_BASE = 'ws://localhost:8000';
+        
+        function connectWebSocket() {
+            const statusEl = document.getElementById('wsStatus');
+            const indicatorEl = document.querySelector('.status-indicator');
+            
+            ws = new WebSocket(`${API_BASE}/ws`);
+            
+            ws.onopen = () => {
+                statusEl.textContent = 'CONNECTED';
+                indicatorEl.className = 'status-indicator status-ok';
+                clearTimeout(reconnectTimer);
+                addEvent('info', 'WebSocket connected to A-SWARM backend');
+            };
+            
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    handleMessage(data);
+                } catch (e) {
+                    console.error('Failed to parse message:', e);
+                }
+            };
+            
+            ws.onerror = (error) => {
+                addEvent('error', `WebSocket error: ${error}`);
+            };
+            
+            ws.onclose = () => {
+                statusEl.textContent = 'RECONNECTING...';
+                indicatorEl.className = 'status-indicator status-warning';
+                reconnectTimer = setTimeout(connectWebSocket, 3000);
+            };
+        }
+        
+        function handleMessage(data) {
+            switch(data.type) {
+                case 'event':
+                    addEvent(data.level || 'info', data.message, data.metadata);
+                    break;
+                case 'episode':
+                    updateEpisode(data);
+                    break;
+                case 'fleet_status':
+                    updateFleetStatus(data);
+                    break;
+                case 'kill_switch':
+                    updateKillSwitch(data);
+                    break;
+                case 'rules_update':
+                    updateRules(data);
+                    break;
+            }
+        }
+        
+        function addEvent(level, message, metadata = {}) {
+            const stream = document.getElementById('eventStream');
+            const line = document.createElement('div');
+            line.className = `event-line ${level}`;
+            const timestamp = new Date().toISOString().split('T')[1].split('.')[0];
+            line.textContent = `[${timestamp}] ${message}`;
+            stream.insertBefore(line, stream.firstChild);
+            
+            // Keep only last 100 events
+            while (stream.children.length > 100) {
+                stream.removeChild(stream.lastChild);
+            }
+        }
+        
+        function updateEpisode(episode) {
+            const container = document.getElementById('episodesContainer');
+            let entry = document.getElementById(`episode-${episode.id}`);
+            
+            if (!entry) {
+                entry = document.createElement('div');
+                entry.id = `episode-${episode.id}`;
+                entry.className = `episode-entry ${episode.status}`;
+                container.insertBefore(entry, container.firstChild);
+            }
+            
+            entry.className = `episode-entry ${episode.status}`;
+            entry.innerHTML = `
+                <div><strong>${episode.attacklet_name}</strong> - ${episode.status.toUpperCase()}</div>
+                <div style="color: #666;">TTD: ${episode.ttd_seconds || '-'}s | Score: ${episode.score || 0}</div>
+            `;
+        }
+        
+        function updateFleetStatus(status) {
+            document.getElementById('sentinelCount').textContent = status.total || 0;
+            document.getElementById('healthyCount').textContent = status.healthy || 0;
+            document.getElementById('cpuUsage').textContent = `${status.avg_cpu || 0}%`;
+            document.getElementById('memUsage').textContent = `${status.avg_memory || 0}MB`;
+            
+            const grid = document.getElementById('fleetGrid');
+            grid.innerHTML = '';
+            
+            if (status.nodes) {
+                status.nodes.forEach(node => {
+                    const nodeEl = document.createElement('div');
+                    nodeEl.className = `sentinel-node ${node.status}`;
+                    nodeEl.innerHTML = `
+                        <div>${node.name}</div>
+                        <div style="font-size: 9px; color: #666;">${node.cpu}% | ${node.memory}MB</div>
+                    `;
+                    grid.appendChild(nodeEl);
+                });
+            }
+        }
+        
+        function updateKillSwitch(data) {
+            const statusEl = document.getElementById('killSwitchStatus');
+            if (data.engaged) {
+                statusEl.className = 'kill-switch-status engaged';
+                statusEl.textContent = 'KILL SWITCH ENGAGED';
+            } else {
+                statusEl.className = 'kill-switch-status';
+                statusEl.textContent = 'SYSTEM ARMED';
+            }
+            
+            if (data.approvals) {
+                document.getElementById('approval1').className = data.approvals[0] ? 'approval-slot approved' : 'approval-slot';
+                document.getElementById('approval2').className = data.approvals[1] ? 'approval-slot approved' : 'approval-slot';
+            }
+        }
+        
+        function updateRules(data) {
+            const list = document.getElementById('rulesList');
+            list.innerHTML = '';
+            
+            if (data.rules) {
+                data.rules.forEach(rule => {
+                    const item = document.createElement('div');
+                    item.className = `rule-item rule-severity-${rule.severity}`;
+                    item.innerHTML = `
+                        <div>
+                            <div>${rule.name}</div>
+                            <div style="font-size: 9px; color: #666;">${rule.technique || 'Unknown'}</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="font-size: 9px;">${rule.threshold}</div>
+                            <div style="font-size: 9px; color: #666;">${rule.enabled ? 'ACTIVE' : 'DISABLED'}</div>
+                        </div>
+                    `;
+                    list.appendChild(item);
+                });
+            }
+            
+            document.getElementById('rulesUpdate').textContent = new Date().toLocaleTimeString();
+        }
+        
+        // Control functions
+        function requestApproval() {
+            addEvent('warning', 'Approval requested for kill switch operation');
+            // In real implementation, would send to backend
+        }
+        
+        function engageKillSwitch() {
+            if (confirm('ENGAGE KILL SWITCH? This will halt all A-SWARM operations.')) {
+                addEvent('error', 'KILL SWITCH ENGAGED - All operations halted');
+                // In real implementation, would send to backend
+            }
+        }
+        
+        function reloadRules() {
+            addEvent('info', 'Reloading detection rules...');
+            // In real implementation, would trigger backend reload
+        }
+        
+        // Initialize
+        function init() {
+            connectWebSocket();
+            
+            // Update timestamp
+            setInterval(() => {
+                document.getElementById('timestamp').textContent = new Date().toISOString().replace('T', ' ').split('.')[0];
+            }, 1000);
+            
+            // Simulate some initial data for demo
+            setTimeout(() => {
+                if (!ws || ws.readyState !== WebSocket.OPEN) {
+                    // Demo mode when not connected
+                    simulateData();
+                }
+            }, 2000);
+        }
+        
+        function simulateData() {
+            // Add demo events
+            addEvent('info', 'A-SWARM Mission Control initialized');
+            addEvent('warning', 'Elevated threat detected on node-3');
+            addEvent('info', 'Fast-path UDP achieving 0.08ms MTTD');
+            
+            // Add demo episodes
+            updateEpisode({
+                id: 'ep-001',
+                attacklet_name: 'privilege-escalation-v1',
+                status: 'detected',
+                ttd_seconds: 0.12,
+                score: 95
+            });
+            
+            updateEpisode({
+                id: 'ep-002',
+                attacklet_name: 'data-exfiltration-v2',
+                status: 'running',
+                ttd_seconds: null,
+                score: 0
+            });
+            
+            // Add demo fleet status
+            updateFleetStatus({
+                total: 5,
+                healthy: 4,
+                avg_cpu: 0.8,
+                avg_memory: 18,
+                nodes: [
+                    { name: 'node-1', status: 'healthy', cpu: 0.7, memory: 17 },
+                    { name: 'node-2', status: 'healthy', cpu: 0.9, memory: 19 },
+                    { name: 'node-3', status: 'degraded', cpu: 1.5, memory: 22 },
+                    { name: 'node-4', status: 'healthy', cpu: 0.6, memory: 16 },
+                    { name: 'node-5', status: 'healthy', cpu: 0.8, memory: 18 }
+                ]
+            });
+            
+            // Add demo rules
+            updateRules({
+                rules: [
+                    { name: 'Privilege Escalation', severity: 'critical', technique: 'T1068', threshold: 0.95, enabled: true },
+                    { name: 'Data Exfiltration', severity: 'high', technique: 'T1041', threshold: 0.90, enabled: true },
+                    { name: 'Lateral Movement', severity: 'high', technique: 'T1021', threshold: 0.85, enabled: true },
+                    { name: 'Command & Control', severity: 'critical', technique: 'T1071', threshold: 0.92, enabled: true },
+                    { name: 'Persistence', severity: 'medium', technique: 'T1136', threshold: 0.80, enabled: false }
+                ]
+            });
+        }
+        
+        // Start the application
+        init();
+    </script>
+</body>
+</html>

@@ -1,0 +1,27 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: aswarm-blue-api
+  labels:
+    app: aswarm-blue-api
+    app.kubernetes.io/name: aswarm-blue-api
+    app.kubernetes.io/part-of: aswarm
+    app.kubernetes.io/component: blue-api
+  annotations:
+    # Common annotations - controller-specific ones added in overlays
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "false"  # Set to true in prod
+spec:
+  ingressClassName: nginx  # Override in overlays if using different controller
+  rules:
+  - host: blue-api.local  # Overridden in overlays
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: aswarm-blue-api
+            port:
+              name: http
+  # TLS added in production overlay

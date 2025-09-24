@@ -1,0 +1,509 @@
+---
+# A-SWARM Identity Management with cert-manager
+# Production-grade SPIFFE-compatible workload identity
+# Zero-compromise security with intermediate CA isolation
+
+# Prerequisites: cert-manager v1.13+ installed with CRDs
+# Deploys in <10 minutes on any Kubernetes platform
+
+# 1) Bootstrap self-signed root issuer (one-time)
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: aswarm-root-selfsigned
+  labels:
+    app.kubernetes.io/part-of: aswarm
+spec:
+  selfSigned: {}
+
+---
+# 2) Root CA Certificate (kept minimal, rotates rarely)
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: aswarm-root-ca
+  namespace: cert-manager
+  labels:
+    app.kubernetes.io/part-of: aswarm
+spec:
+  isCA: true
+  commonName: "A-SWARM Root CA"
+  secretName: aswarm-root-ca-secret
+  duration: 8760h # 365 days
+  renewBefore: 720h # 30 days
+  subject:
+    organizations:
+      - "A-SWARM Security"
+    countries:
+      - "US"
+    organizationalUnits:
+      - "Autonomous Defense Systems"
+  privateKey:
+    algorithm: RSA
+    size: 4096
+    rotationPolicy: Always
+    encoding: PKCS8
+  issuerRef:
+    name: aswarm-root-selfsigned
+    kind: ClusterIssuer
+    group: cert-manager.io
+
+---
+# 3) Root CA Issuer (for signing intermediate)
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: aswarm-root-ca-issuer
+  labels:
+    app.kubernetes.io/part-of: aswarm
+spec:
+  ca:
+    secretName: aswarm-root-ca-secret
+
+---
+# 4) Intermediate CA Certificate (in-cluster, shorter lived)
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: aswarm-intermediate-ca
+  namespace: cert-manager
+  labels:
+    app.kubernetes.io/part-of: aswarm
+spec:
+  isCA: true
+  commonName: "A-SWARM Intermediate CA"
+  secretName: aswarm-intermediate-ca-secret
+  duration: 2160h # 90 days
+  renewBefore: 360h # 15 days
+  subject:
+    organizations:
+      - "A-SWARM Security"
+    organizationalUnits:
+      - "Intermediate Authority"
+  privateKey:
+    algorithm: RSA
+    size: 4096
+    rotationPolicy: Always
+    encoding: PKCS8
+  issuerRef:
+    name: aswarm-root-ca-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+
+---
+# 5) Intermediate CA Issuer (signs all workload certs)
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: aswarm-intermediate-issuer
+  labels:
+    app.kubernetes.io/part-of: aswarm
+spec:
+  ca:
+    secretName: aswarm-intermediate-ca-secret
+
+---
+# A-SWARM System Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aswarm
+  labels:
+    app.kubernetes.io/name: aswarm
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+
+---
+# 6) Namespace-scoped issuer (limits blast radius)
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: aswarm-issuer
+  namespace: aswarm
+  labels:
+    app.kubernetes.io/part-of: aswarm
+spec:
+  ca:
+    secretName: aswarm-intermediate-ca-secret
+
+---
+# Service accounts for A-SWARM components
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aswarm-pheromone
+  namespace: aswarm
+  labels:
+    app.kubernetes.io/component: pheromone
+    app.kubernetes.io/part-of: aswarm
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aswarm-sentinel
+  namespace: aswarm
+  labels:
+    app.kubernetes.io/component: sentinel
+    app.kubernetes.io/part-of: aswarm
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aswarm-redswarm
+  namespace: aswarm
+  labels:
+    app.kubernetes.io/component: redswarm
+    app.kubernetes.io/part-of: aswarm
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aswarm-blueswarm
+  namespace: aswarm
+  labels:
+    app.kubernetes.io/component: blueswarm
+    app.kubernetes.io/part-of: aswarm
+
+---
+# 7) Pheromone workload identity (Protocol V4)
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: pheromone-identity
+  namespace: aswarm
+  labels:
+    app.kubernetes.io/component: pheromone
+    app.kubernetes.io/part-of: aswarm
+spec:
+  secretName: pheromone-tls
+  duration: 24h # Short-lived for security
+  renewBefore: 6h # Renew 4 times per day
+  commonName: pheromone.aswarm.svc.cluster.local
+  subject:
+    organizationalUnits:
+      - "A-SWARM Protocol V4"
+  dnsNames:
+    - pheromone
+    - pheromone.aswarm
+    - pheromone.aswarm.svc
+    - pheromone.aswarm.svc.cluster.local
+  uris: # SPIFFE-compatible identity URI
+    - spiffe://aswarm.local/ns/aswarm/sa/aswarm-pheromone
+  usages:
+    - digital signature
+    - key agreement      # ECDSA uses key agreement
+    - server auth
+    - client auth
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+    encoding: PKCS8
+  issuerRef:
+    name: aswarm-issuer
+    kind: Issuer
+    group: cert-manager.io
+  secretTemplate:
+    labels:
+      aswarm.io/identity: pheromone
+      aswarm.io/spiffe-id: "spiffe://aswarm.local/ns/aswarm/sa/aswarm-pheromone"
+
+---
+# 8) Red Swarm workload identity
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: redswarm-identity
+  namespace: aswarm
+  labels:
+    app.kubernetes.io/component: redswarm
+    app.kubernetes.io/part-of: aswarm
+spec:
+  secretName: redswarm-tls
+  duration: 24h # Short-lived for adversarial containers
+  renewBefore: 6h
+  commonName: redswarm.aswarm.svc.cluster.local
+  subject:
+    organizationalUnits:
+      - "A-SWARM Red Team"
+  dnsNames:
+    - redswarm
+    - redswarm.aswarm
+    - redswarm.aswarm.svc
+    - redswarm.aswarm.svc.cluster.local
+  uris: # SPIFFE-compatible identity URI
+    - spiffe://aswarm.local/ns/aswarm/sa/aswarm-redswarm
+  usages:
+    - digital signature
+    - key agreement
+    - server auth
+    - client auth
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+    encoding: PKCS8
+  issuerRef:
+    name: aswarm-issuer
+    kind: Issuer
+    group: cert-manager.io
+  secretTemplate:
+    labels:
+      aswarm.io/identity: redswarm
+      aswarm.io/spiffe-id: "spiffe://aswarm.local/ns/aswarm/sa/aswarm-redswarm"
+
+---
+# 9) Blue Swarm workload identity
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: blueswarm-identity
+  namespace: aswarm
+  labels:
+    app.kubernetes.io/component: blueswarm
+    app.kubernetes.io/part-of: aswarm
+spec:
+  secretName: blueswarm-tls
+  duration: 24h # Short-lived for detection services
+  renewBefore: 6h
+  commonName: blueswarm.aswarm.svc.cluster.local
+  subject:
+    organizationalUnits:
+      - "A-SWARM Blue Team"
+  dnsNames:
+    - blueswarm
+    - blueswarm.aswarm
+    - blueswarm.aswarm.svc
+    - blueswarm.aswarm.svc.cluster.local
+  uris: # SPIFFE-compatible identity URI
+    - spiffe://aswarm.local/ns/aswarm/sa/aswarm-blueswarm
+  usages:
+    - digital signature
+    - key agreement
+    - server auth
+    - client auth
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+    encoding: PKCS8
+  issuerRef:
+    name: aswarm-issuer
+    kind: Issuer
+    group: cert-manager.io
+  secretTemplate:
+    labels:
+      aswarm.io/identity: blueswarm
+      aswarm.io/spiffe-id: "spiffe://aswarm.local/ns/aswarm/sa/aswarm-blueswarm"
+
+---
+# 10) Sentinel workload identity
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: sentinel-identity
+  namespace: aswarm
+  labels:
+    app.kubernetes.io/component: sentinel
+    app.kubernetes.io/part-of: aswarm
+spec:
+  secretName: sentinel-tls
+  duration: 24h # Short-lived for telemetry agents
+  renewBefore: 6h
+  commonName: sentinel.aswarm.svc.cluster.local
+  subject:
+    organizationalUnits:
+      - "A-SWARM Sentinel"
+  dnsNames:
+    - sentinel
+    - sentinel.aswarm
+    - sentinel.aswarm.svc
+    - sentinel.aswarm.svc.cluster.local
+  uris: # SPIFFE-compatible identity URI
+    - spiffe://aswarm.local/ns/aswarm/sa/aswarm-sentinel
+  usages:
+    - digital signature
+    - key agreement
+    - server auth
+    - client auth
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+    encoding: PKCS8
+  issuerRef:
+    name: aswarm-issuer
+    kind: Issuer
+    group: cert-manager.io
+  secretTemplate:
+    labels:
+      aswarm.io/identity: sentinel
+      aswarm.io/spiffe-id: "spiffe://aswarm.local/ns/aswarm/sa/aswarm-sentinel"
+
+---
+# 11) RBAC: Certificate Management Permissions
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: aswarm-certificate-reader
+  namespace: aswarm
+  labels:
+    app.kubernetes.io/part-of: aswarm
+rules:
+- apiGroups: ["cert-manager.io"]
+  resources: ["certificates"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch"]
+  resourceNames:
+    - pheromone-tls
+    - sentinel-tls
+    - redswarm-tls
+    - blueswarm-tls
+
+---
+# Bind read permissions to all service accounts
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: aswarm-certificate-readers
+  namespace: aswarm
+  labels:
+    app.kubernetes.io/part-of: aswarm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: aswarm-certificate-reader
+subjects:
+- kind: ServiceAccount
+  name: aswarm-pheromone
+  namespace: aswarm
+- kind: ServiceAccount
+  name: aswarm-sentinel
+  namespace: aswarm
+- kind: ServiceAccount
+  name: aswarm-redswarm
+  namespace: aswarm
+- kind: ServiceAccount
+  name: aswarm-blueswarm
+  namespace: aswarm
+
+---
+# 12) Preflight check job (validates identity system)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: aswarm-identity-preflight
+  namespace: aswarm
+  labels:
+    app.kubernetes.io/part-of: aswarm
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aswarm-preflight
+    spec:
+      restartPolicy: Never
+      serviceAccountName: aswarm-sentinel
+      containers:
+      - name: preflight
+        image: bitnami/kubectl:latest
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -euo pipefail
+          echo "=== A-SWARM Identity Preflight Check ==="
+          
+          # Check cert-manager is ready
+          echo "1. Verifying cert-manager installation..."
+          kubectl get crd certificates.cert-manager.io || {
+            echo "ERROR: cert-manager CRDs not found"
+            exit 1
+          }
+          
+          # Check our issuers exist
+          echo "2. Verifying A-SWARM issuers..."
+          kubectl get clusterissuer aswarm-intermediate-issuer || {
+            echo "ERROR: A-SWARM intermediate issuer not found"
+            exit 1
+          }
+          
+          # Check namespace issuer
+          kubectl get issuer aswarm-issuer -n aswarm || {
+            echo "ERROR: A-SWARM namespace issuer not found"
+            exit 1
+          }
+          
+          # Check certificates are issued
+          echo "3. Verifying workload certificates..."
+          for cert in pheromone-identity sentinel-identity redswarm-identity blueswarm-identity; do
+            kubectl get certificate $cert -n aswarm -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' | grep -q "True" || {
+              echo "WARNING: Certificate $cert not ready yet"
+            }
+          done
+          
+          # Check SPIFFE URI in certificates
+          echo "4. Validating SPIFFE identities..."
+          kubectl get secret pheromone-tls -n aswarm -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -text -noout | grep -q "URI:spiffe://aswarm.local" && {
+            echo "✓ SPIFFE URIs present in certificates"
+          } || {
+            echo "WARNING: SPIFFE URIs may not be configured"
+          }
+          
+          echo "=== Preflight check complete ==="
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65534
+          capabilities:
+            drop: ["ALL"]
+
+---
+# 13) ConfigMap for cert reload sidecar (optional but recommended)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aswarm-cert-reload-config
+  namespace: aswarm
+  labels:
+    app.kubernetes.io/part-of: aswarm
+data:
+  reload.sh: |
+    #!/bin/sh
+    # Simple certificate reload watcher
+    # Mount this as a sidecar to reload on cert rotation
+    
+    CERT_DIR="${CERT_DIR:-/certs}"
+    RELOAD_SIGNAL="${RELOAD_SIGNAL:-SIGHUP}"
+    PROCESS_NAME="${PROCESS_NAME:-main}"
+    
+    echo "Starting cert reload watcher..."
+    echo "Watching: $CERT_DIR"
+    echo "Process: $PROCESS_NAME"
+    echo "Signal: $RELOAD_SIGNAL"
+    
+    # Initial hash
+    LAST_HASH=$(find $CERT_DIR -type f -name "*.crt" -o -name "*.key" | sort | xargs sha256sum | sha256sum)
+    
+    while true; do
+      sleep 60
+      CURRENT_HASH=$(find $CERT_DIR -type f -name "*.crt" -o -name "*.key" | sort | xargs sha256sum | sha256sum)
+      
+      if [ "$LAST_HASH" != "$CURRENT_HASH" ]; then
+        echo "Certificate change detected, sending $RELOAD_SIGNAL to $PROCESS_NAME"
+        pkill -$RELOAD_SIGNAL $PROCESS_NAME || echo "Warning: Failed to signal process"
+        LAST_HASH=$CURRENT_HASH
+      fi
+    done

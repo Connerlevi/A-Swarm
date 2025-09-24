@@ -1,0 +1,210 @@
+{{- if and .Values.global.enabled .Values.networkPolicies.enabled -}}
+---
+# NetworkPolicy for Sentinel (allows metrics scraping)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "aswarm.fullname" . }}-sentinel
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aswarm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sentinel
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "aswarm.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: sentinel
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    {{- if .Values.monitoring.prometheus.enabled }}
+    # Allow Prometheus scraping
+    - from:
+        {{- range .Values.networkPolicies.allowedNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.monitoring.prometheus.port }}
+    {{- end }}
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow Kubernetes API
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              component: kube-apiserver
+      ports:
+        - protocol: TCP
+          port: 443
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-apiserver
+      ports:
+        - protocol: TCP
+          port: 443
+---
+# NetworkPolicy for Pheromone
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "aswarm.fullname" . }}-pheromone
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aswarm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pheromone
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "aswarm.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: pheromone
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    {{- if .Values.monitoring.prometheus.enabled }}
+    # Allow Prometheus scraping
+    - from:
+        {{- range .Values.networkPolicies.allowedNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.monitoring.prometheus.port }}
+    {{- end }}
+    # Allow health checks
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8080
+    {{- if .Values.fastpath.enabled }}
+    # Allow UDP fast path
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: sentinel
+      ports:
+        - protocol: UDP
+          port: {{ .Values.fastpath.port }}
+    {{- end }}
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow Kubernetes API
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              component: kube-apiserver
+      ports:
+        - protocol: TCP
+          port: 443
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-apiserver
+      ports:
+        - protocol: TCP
+          port: 443
+---
+# NetworkPolicy for MicroAct
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "aswarm.fullname" . }}-microact
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aswarm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: microact
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "aswarm.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: microact
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    {{- if .Values.monitoring.prometheus.enabled }}
+    # Allow Prometheus scraping
+    - from:
+        {{- range .Values.networkPolicies.allowedNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.monitoring.prometheus.port }}
+    {{- end }}
+    # Allow health checks
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow Kubernetes API
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              component: kube-apiserver
+      ports:
+        - protocol: TCP
+          port: 443
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-apiserver
+      ports:
+        - protocol: TCP
+          port: 443
+{{- end -}}

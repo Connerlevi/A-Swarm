@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: aswarm-blue-api
+  annotations:
+    # Development-specific annotations
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    # Allow larger request bodies for testing
+    nginx.ingress.kubernetes.io/client-max-body-size: "10m"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: blue-api-dev.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: aswarm-blue-api
+            port:
+              name: http
+  # No TLS in development for simplicity

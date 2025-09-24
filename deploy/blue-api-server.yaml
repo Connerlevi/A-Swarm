@@ -1,0 +1,242 @@
+# Blue API auth token (separate from TLS)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: aswarm-blue-api-auth
+  namespace: aswarm
+type: Opaque
+stringData:
+  token: "change-me-in-prod"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aswarm-blue-api
+  namespace: aswarm
+  labels:
+    app: aswarm-blue-api
+    app.kubernetes.io/name: aswarm
+    app.kubernetes.io/component: blue-api
+spec:
+  selector:
+    app: aswarm-blue-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+  type: ClusterIP
+
+---
+# ServiceAccount (re-using your identity SA name)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aswarm-blueswarm
+  namespace: aswarm
+  labels:
+    app.kubernetes.io/name: aswarm
+    app.kubernetes.io/component: blue-api
+
+---
+# Blue API Server Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aswarm-blue-api
+  namespace: aswarm
+  labels:
+    app: aswarm-blue-api
+    app.kubernetes.io/name: aswarm
+    app.kubernetes.io/component: blue-api
+    app.kubernetes.io/part-of: aswarm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aswarm-blue-api
+  template:
+    metadata:
+      labels:
+        app: aswarm-blue-api
+        app.kubernetes.io/name: aswarm
+        app.kubernetes.io/component: blue-api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: aswarm-blueswarm
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        fsGroupChangePolicy: Always
+
+      containers:
+        - name: blue-api
+          image: python:3.11-slim
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh","-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              export PIP_NO_CACHE_DIR=1
+              mkdir -p /work/venv /data/content /data/storage
+              python -m pip install --no-cache-dir --target /work/venv \
+                "aiohttp==3.9.*" "prometheus_client" "pyyaml" "cryptography"
+              export PYTHONPATH="/work/venv:/app"
+              echo ">>> sys.path"; python - <<'PY'
+              import sys; [print("  ", p) for p in sys.path]
+              import importlib
+              importlib.import_module("redswarm")
+              importlib.import_module("redswarm.blue_main")
+              importlib.import_module("redswarm.blue_api_server")
+              importlib.import_module("redswarm.blue_detection_engine")
+              importlib.import_module("redswarm.content_pack")
+              importlib.import_module("pheromone.identity_loader")
+              importlib.import_module("pheromone.protocol_v4_crypto_fixed")
+              print(">>> imports OK")
+              PY
+              echo ">>> launching blue_main…"
+              exec python -u -m redswarm.blue_main \
+                --api-port 8080 \
+                --content-dir /data/content \
+                --storage-dir /data/storage \
+                --auth-token "$ASWARM_AUTH_TOKEN"
+          env:
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+
+            # Engine & API config
+            - name: ASWARM_COMPONENT_NAME
+              value: blueswarm-api
+            - name: ASWARM_CONTENT_DIR
+              value: /data/content
+            - name: ASWARM_STORAGE_DIR
+              value: /data/storage
+            - name: ASWARM_API_PORT
+              value: "8080"
+            - name: ASWARM_CORS_ORIGIN
+              value: "*"
+
+            # Auth token for protected endpoints
+            - name: ASWARM_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: aswarm-blue-api-auth
+                  key: token
+
+            # Identity / TLS paths (align with your loaders)
+            - name: ASWARM_CERT_PATH
+              value: /etc/aswarm/tls/tls.crt
+            - name: ASWARM_KEY_PATH
+              value: /etc/aswarm/tls/tls.key
+            - name: ASWARM_CA_PATH
+              value: /etc/aswarm/ca/ca.crt
+            - name: ASWARM_SPIFFE_ID
+              value: spiffe://aswarm.local/ns/aswarm/sa/aswarm-blueswarm
+
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 6
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 6
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+
+          volumeMounts:
+            - name: work
+              mountPath: /work
+            - name: app-code
+              mountPath: /app
+              readOnly: true
+            - name: tls-certs
+              mountPath: /etc/aswarm/tls
+              readOnly: true
+            - name: ca-certs
+              mountPath: /etc/aswarm/ca
+              readOnly: true
+            - name: content
+              mountPath: /data/content
+            - name: storage
+              mountPath: /data/storage
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: work
+          emptyDir: {}
+        - name: app-code
+          configMap:
+            name: aswarm-blue-api-code
+            items:
+              # redswarm files (auto-included)
+              - key: blue_main.py
+                path: redswarm/blue_main.py
+              - key: __init__.py
+                path: redswarm/__init__.py
+              - key: blue_api_server.py
+                path: redswarm/blue_api_server.py
+              - key: blue_detection_engine.py
+                path: redswarm/blue_detection_engine.py
+              - key: content_pack.py
+                path: redswarm/content_pack.py
+              # pheromone files (with renamed keys)
+              - key: pheromone-init
+                path: pheromone/__init__.py
+              - key: pheromone-identity-loader
+                path: pheromone/identity_loader.py
+              - key: pheromone-protocol-v4-crypto
+                path: pheromone/protocol_v4_crypto_fixed.py
+              - key: pheromone-crypto
+                path: pheromone/crypto.py
+        - name: tls-certs
+          secret:
+            secretName: blueswarm-tls
+        - name: ca-certs
+          secret:
+            secretName: aswarm-ca
+        - name: content
+          configMap:
+            name: aswarm-detections
+        - name: storage
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

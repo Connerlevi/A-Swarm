@@ -1,0 +1,38 @@
+{{- if .Values.global.enabled -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.killSwitch.configMapName }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aswarm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: killswitch
+data:
+  # Global kill switch - set to "disabled" to stop all enforcement
+  state: {{ .Values.killSwitch.defaultState | quote }}
+  
+  # Per-ring kill switches
+  ring1.enabled: "true"
+  ring2.enabled: "true" 
+  ring3.enabled: {{ if le (int .Values.global.maxRing) 3 }}"true"{{ else }}"false"{{ end }}
+  ring4.enabled: {{ if le (int .Values.global.maxRing) 4 }}"true"{{ else }}"false"{{ end }}
+  ring5.enabled: "false"  # Physical actions always disabled by default
+  
+  # Component kill switches
+  sentinel.enabled: {{ .Values.sentinel.enabled | quote }}
+  pheromone.enabled: {{ .Values.pheromone.enabled | quote }}
+  microact.enabled: {{ .Values.microact.enabled | quote }}
+  
+  # Feature flags
+  fastpath.enabled: {{ .Values.fastpath.enabled | quote }}
+  dryrun.enabled: {{ .Values.global.dryRun | quote }}
+  
+  # Emergency contacts
+  contacts: |
+    oncall: security-oncall@example.com
+    escalation: security-lead@example.com
+    
+  # Last updated
+  updated: {{ now | date "2006-01-02T15:04:05Z07:00" | quote }}
+  updated_by: "helm-install"
+{{- end -}}

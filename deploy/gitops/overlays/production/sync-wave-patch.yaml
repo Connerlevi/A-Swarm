@@ -1,0 +1,58 @@
+# Sync wave annotations for deterministic production deployment order
+# Applied via Kustomize patches to ensure resources are created in the correct sequence
+
+# PVC - Wave -3 (created first)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: aswarm-blue-api-storage
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+---
+# ConfigMap - Wave -2 (needed by deployment)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aswarm-detections
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+---
+# NetworkPolicy - Wave -1 (after namespace, before workloads)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aswarm-blue-api
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+---
+# Service - Wave -1 (before Deployment for service discovery)
+apiVersion: v1
+kind: Service
+metadata:
+  name: aswarm-blue-api
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+---
+# Deployment - Wave 0 (main workload)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aswarm-blue-api
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+---
+# PDB - Wave 1 (after deployment exists)
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: aswarm-blue-api-pdb
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+---
+# Ingress - Wave 2 (after service exists)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: aswarm-blue-api
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"

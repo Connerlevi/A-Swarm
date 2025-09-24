@@ -1,0 +1,12 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aswarm-blue-api
+spec:
+  template:
+    metadata:
+      annotations:
+        # Enable Prometheus scraping for development debugging
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"

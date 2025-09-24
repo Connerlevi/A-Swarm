@@ -1,0 +1,55 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: anomaly-scan
+  namespace: aswarm
+  labels:
+    app: anomaly
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app: anomaly
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: scanner
+        image: python:3.11-slim
+        command: ["bash","-c"]
+        args:
+        - |
+          python - <<'PY'
+          import time, random, socket
+          from datetime import datetime, timezone
+          
+          # Print anomaly start timestamp
+          start_time = datetime.now(timezone.utc)
+          print(f"T_ANOMALY_START {start_time.isoformat()}", flush=True)
+          print(f"Starting rapid port scan simulation at {start_time}", flush=True)
+          
+          # Target noisy pods
+          targets = [f"noisy-{i}.aswarm.svc.cluster.local" for i in range(30)]
+          
+          # Rapid-fire PORTSCAN events for fast detection
+          for i in range(500):  # 500 events total
+              target = random.choice(targets)
+              port = random.choice([22, 80, 443, 3306, 5432, 6379, 8080, 9200])
+              
+              # Print PORTSCAN event (this is what Pheromone detects)
+              print(f"PORTSCAN {target}:{port}", flush=True)
+              
+              # Try actual connection (will fail, that's ok)
+              try:
+                  sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                  sock.settimeout(0.01)  # 10ms timeout
+                  sock.connect((target, port))
+                  sock.close()
+              except:
+                  pass
+              
+              # 10ms between scans = 100 events/second
+              time.sleep(0.01)
+          
+          print("Port scan simulation complete", flush=True)
+          PY

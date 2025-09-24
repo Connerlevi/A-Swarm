@@ -1,0 +1,114 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anomaly-generator
+  namespace: aswarm
+  labels:
+    app: anomaly
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: anomaly
+      role: generator
+  template:
+    metadata:
+      labels:
+        app: anomaly
+        role: generator
+    spec:
+      containers:
+      - name: scanner
+        image: python:3.11-slim
+        command: ["bash","-c"]
+        args:
+        - |
+          # Install netcat
+          apt-get update && apt-get install -y netcat-openbsd
+          
+          # Create control script
+          cat > /tmp/control.py << 'EOF'
+          import sys, os, signal
+          
+          if len(sys.argv) < 3:
+              print("Usage: python control.py <pid> <start|stop>")
+              sys.exit(1)
+          
+          pid = int(sys.argv[1])
+          action = sys.argv[2]
+          
+          if action == "start":
+              os.kill(pid, signal.SIGUSR1)
+              print("Sent start signal")
+          elif action == "stop":
+              os.kill(pid, signal.SIGUSR2)
+              print("Sent stop signal")
+          else:
+              print(f"Unknown action: {action}")
+              sys.exit(1)
+          EOF
+          
+          python - <<'PY'
+          import time, random, socket, os, signal
+          from datetime import datetime, timezone
+          
+          running = False
+          
+          def start_scan(signum, frame):
+              global running
+              running = True
+              print(f"SCAN TRIGGERED at {datetime.now(timezone.utc).isoformat()}", flush=True)
+          
+          def stop_scan(signum, frame):
+              global running
+              running = False
+              print(f"SCAN STOPPED at {datetime.now(timezone.utc).isoformat()}", flush=True)
+          
+          # Register signal handlers
+          signal.signal(signal.SIGUSR1, start_scan)
+          signal.signal(signal.SIGUSR2, stop_scan)
+          
+          print(f"Anomaly generator ready. PID: {os.getpid()}", flush=True)
+          print("Send SIGUSR1 to start scan, SIGUSR2 to stop", flush=True)
+          
+          targets = [f"noisy-{i}.aswarm.svc.cluster.local" for i in range(30)]
+          
+          while True:
+              if running:
+                  # Print start marker once
+                  start_time = datetime.now(timezone.utc)
+                  print(f"T_ANOMALY_START {start_time.isoformat()}", flush=True)
+                  
+                  # Rapid scan while running
+                  scan_count = 0
+                  while running and scan_count < 500:
+                      target = random.choice(targets)
+                      port = random.choice([22, 80, 443, 3306, 5432, 6379, 8080, 9200])
+                      
+                      print(f"PORTSCAN {target}:{port}", flush=True)
+                      
+                      try:
+                          sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                          sock.settimeout(0.01)
+                          sock.connect((target, port))
+                          sock.close()
+                      except:
+                          pass
+                      
+                      scan_count += 1
+                      time.sleep(0.01)  # 100 events/sec
+                  
+                  if running:
+                      running = False
+                      print(f"Scan complete: {scan_count} events", flush=True)
+              else:
+                  # Idle
+                  time.sleep(0.1)
+          PY
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+          limits:
+            cpu: "200m"
+            memory: "128Mi"

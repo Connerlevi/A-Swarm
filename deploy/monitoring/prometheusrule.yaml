@@ -1,0 +1,103 @@
+---
+# PrometheusRule for Blue API - Apply when Prometheus Operator is available
+# Production-ready alerts with namespace+service selectors and robust expressions
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: aswarm-blue-api
+  namespace: aswarm
+  labels:
+    app: aswarm-blue-api
+    app.kubernetes.io/name: aswarm
+    app.kubernetes.io/component: blue-api
+    # Uncomment when installing kube-prometheus-stack:
+    # release: kube-prometheus-stack
+spec:
+  groups:
+  - name: blue-api.rules
+    rules:
+    # Service availability
+    - alert: BlueApiDown
+      expr: sum(up{namespace="aswarm", service="aswarm-blue-api"}) == 0
+      for: 5m
+      labels: 
+        severity: critical
+      annotations:
+        summary: "Blue API is down"
+        description: "No scrape targets are up for Blue API service for 5m."
+
+    - alert: BlueApiTargetsMissing
+      expr: absent(up{namespace="aswarm", service="aswarm-blue-api"})
+      for: 5m
+      labels: 
+        severity: critical
+      annotations:
+        summary: "Blue API targets missing"
+        description: "Prometheus has discovered zero scrape targets for the Blue API service."
+
+    # Request error rates (5xx/4xx errors)
+    - alert: BlueApiRequestErrors
+      expr: |
+        (sum(rate(aswarm_blue_api_request_total{namespace="aswarm", service="aswarm-blue-api", status!~"2.."}[5m]))
+         /
+         sum(rate(aswarm_blue_api_request_total{namespace="aswarm", service="aswarm-blue-api"}[5m])))
+        > 0.05
+      for: 5m
+      labels: 
+        severity: warning
+      annotations:
+        summary: "Blue API error rate high"
+        description: "5xx/4xx error rate > 5% over 5m (value={{ $value | humanizePercentage }})."
+
+    # Request latency (P95)
+    - alert: BlueApiRequestLatency
+      expr: |
+        histogram_quantile(
+          0.95,
+          sum by (le) (rate(aswarm_blue_api_request_seconds_bucket{namespace="aswarm", service="aswarm-blue-api"}[5m]))
+        ) > 0.5
+      for: 5m
+      labels: 
+        severity: warning
+      annotations:
+        summary: "Blue API P95 latency high"
+        description: "P95 request latency > 0.5s for 5m (value={{ $value }}s)."
+
+    # Detection rules loaded
+    - alert: BlueApiNoRulesLoaded
+      expr: aswarm_blue_rules_loaded{namespace="aswarm", service="aswarm-blue-api"} < 1
+      for: 10m
+      labels: 
+        severity: critical
+      annotations:
+        summary: "Blue API has no rules loaded"
+        description: "Expected ≥1 rules; got {{ $value }}."
+
+    # Detection activity
+    - alert: BlueApiDetectionSpike
+      expr: sum(rate(aswarm_blue_detections_total{namespace="aswarm", service="aswarm-blue-api"}[5m])) > 10
+      for: 10m
+      labels: 
+        severity: warning
+      annotations:
+        summary: "Detection spike detected"
+        description: "Sustained high detection rate {{ $value }}/sec over 10m."
+
+    - alert: BlueApiNoDetections
+      expr: sum(increase(aswarm_blue_detections_total{namespace="aswarm", service="aswarm-blue-api"}[24h])) == 0
+      for: 1h
+      labels: 
+        severity: info
+      annotations:
+        summary: "No detections in 24h"
+        description: "Might indicate quiet environment or ingest issues."
+
+    # Metrics staleness (exporter silent)
+    - alert: BlueApiMetricsStale
+      expr: time() - max(timestamp(aswarm_blue_detections_total{namespace="aswarm", service="aswarm-blue-api"})) > 900
+      for: 0m
+      labels: 
+        severity: warning
+      annotations:
+        summary: "Blue API metrics stale"
+        description: "Exporter is up but no fresh datapoints for >15m."

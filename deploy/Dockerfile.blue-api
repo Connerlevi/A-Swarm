@@ -1,0 +1,48 @@
+# A-SWARM Blue API Server - Zero-Compromise Container
+FROM python:3.11-slim-bookworm AS build
+
+# Non-root user
+RUN groupadd -r aswarm && useradd -r -g aswarm -d /home/aswarm aswarm
+WORKDIR /app
+
+# Copy only needed source (adjust if your repo layout differs)
+COPY redswarm/ redswarm/
+COPY pheromone/ pheromone/
+
+# Deterministic wheel-only install
+ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+RUN python -m pip install --no-cache-dir --only-binary=:all: \
+    --target /usr/local/lib/python3.11/site-packages \
+    aiohttp==3.9.5 \
+    prometheus_client==0.22.1 \
+    pyyaml==6.0.2 \
+    cryptography==43.0.1
+
+# ---- Runtime image ----
+FROM python:3.11-slim-bookworm
+
+# Non-root user (same uid/gid) and data dirs
+RUN groupadd -r aswarm && useradd -r -g aswarm -d /home/aswarm aswarm && \
+    mkdir -p /data/content /data/storage /home/aswarm && \
+    chown -R aswarm:aswarm /data /home/aswarm
+
+USER aswarm
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH="/app" \
+    HOME="/home/aswarm"
+
+# Copy libs + app with ownership
+COPY --chown=aswarm:aswarm --from=build /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --chown=aswarm:aswarm --from=build /app /app
+
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')" || exit 1
+
+CMD ["python","-u","-m","redswarm.blue_main", \
+     "--api-port","8080", \
+     "--content-dir","/data/content", \
+     "--storage-dir","/data/storage"]

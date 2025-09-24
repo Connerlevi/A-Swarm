@@ -1,0 +1,129 @@
+# Production values for A-SWARM
+# Use this as a starting point for production deployments
+
+global:
+  # Enable enforcement (not dry-run)
+  dryRun: false
+  
+  # Production namespace
+  namespace: aswarm-prod
+  
+  # Use your private registry
+  imageRegistry: registry.company.com
+  
+  # Image pull secret for private registry
+  imagePullSecrets:
+    - name: regcred
+
+# Sentinel configuration
+sentinel:
+  # Production resource limits
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  
+  # Tolerate all nodes including masters
+  tolerations:
+    - operator: Exists
+
+# Pheromone configuration  
+pheromone:
+  # HA deployment
+  replicas: 5
+  
+  # Production settings
+  detection:
+    windowMs: 100      # Slightly higher for stability
+    quorumThreshold: 3 # Require 3 witnesses
+  
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+
+# MicroAct configuration
+microact:
+  # HA deployment
+  replicas: 3
+  
+  enforcement:
+    # Production limits
+    maxRing: 2      # Only reversible actions
+    dryRun: false
+    defaultTTL: 600 # 10 minutes
+  
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+# Custom policies for production
+policies:
+  custom:
+    - name: aggressive-isolation
+      ring: 2
+      action: networkpolicy_isolate
+      scoreThreshold: 0.65  # Lower threshold
+      ttlSeconds: 1800      # 30 minutes
+      conditions:
+        anomaly_type: "lateral_movement"
+    
+    - name: api-protection
+      ring: 2
+      action: egress_rate_limit
+      scoreThreshold: 0.7
+      ttlSeconds: 600
+      params:
+        rateMbps: 5
+      conditions:
+        target_port: 443
+
+# Enable monitoring
+monitoring:
+  prometheus:
+    enabled: true
+  
+  serviceMonitor:
+    enabled: true
+    labels:
+      prometheus: kube-prometheus
+
+# Evidence collection  
+evidence:
+  enabled: true
+  schedule: "0 */4 * * *"  # Every 4 hours
+  
+  storage:
+    size: 50Gi
+    className: fast-ssd
+
+# Network policies
+networkPolicies:
+  enabled: true
+  
+  # Allow additional namespaces
+  allowedNamespaces:
+    - kube-system
+    - monitoring
+    - istio-system
+    - logging
+
+# Pod Security Standards (production hardening)
+podSecurityStandards:
+  enforce: restricted
+  audit: baseline     # Less strict for audit
+  warn: restricted
+
+# Disable demo workloads in production
+demo:
+  enabled: false

@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: aswarm-blue-api
+  labels:
+    app: aswarm-blue-api
+    app.kubernetes.io/name: aswarm-blue-api
+    app.kubernetes.io/part-of: aswarm
+    app.kubernetes.io/component: blue-api
+spec:
+  type: ClusterIP
+  selector:
+    app: aswarm-blue-api
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
+    protocol: TCP

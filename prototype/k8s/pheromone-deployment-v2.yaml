@@ -1,0 +1,147 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aswarm-pheromone
+  namespace: aswarm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aswarm-pheromone
+  template:
+    metadata:
+      labels:
+        app: aswarm-pheromone
+    spec:
+      serviceAccountName: aswarm-sa
+      containers:
+      - name: aggregator
+        image: python:3.11-slim
+        command: ["bash","-c"]
+        args:
+        - |
+          pip install --no-cache-dir kubernetes
+          python - <<'PY'
+          import os, time, json, sys
+          from datetime import datetime, timezone
+          from kubernetes import client, config, watch
+          from collections import deque
+          
+          # in-cluster config
+          config.load_incluster_config()
+          v1 = client.CoreV1Api()
+          ns = "aswarm"
+          w = watch.Watch()
+          
+          # Configuration
+          threshold = 25  # number of anomaly lines in window to elevate
+          window_seconds = 10  # sliding window size
+          scenario_id = os.environ.get("SCENARIO_ID", "portscan-fanout")
+          
+          # Get run_id from ConfigMap (wait for it)
+          run_id = None
+          while not run_id:
+              try:
+                  cm = v1.read_namespaced_config_map("run-config", ns)
+                  run_id = cm.data.get("run_id")
+                  if run_id:
+                      print(f"Using run_id: {run_id}", flush=True)
+                      break
+              except:
+                  pass
+              time.sleep(1)
+          
+          # Sliding window for event tracking
+          event_window = deque()
+          elevated = False
+          
+          while True:
+              current_time = time.time()
+              
+              # Remove old events outside window
+              while event_window and event_window[0]["time"] < current_time - window_seconds:
+                  event_window.popleft()
+              
+              # Count recent 'PORTSCAN' events from anomaly pods via logs
+              pods = v1.list_namespaced_pod(ns, label_selector="app=anomaly").items
+              witness_pods = set()
+              new_events = 0
+              
+              for p in pods:
+                  try:
+                      # Check if pod has the right run_id
+                      job_name = p.metadata.labels.get("job-name", "")
+                      if job_name:
+                          job = v1.read_namespaced_job(job_name, ns)
+                          if job.metadata.annotations.get("run_id") != run_id:
+                              continue
+                      
+                      lg = v1.read_namespaced_pod_log(p.metadata.name, ns, tail_lines=50)
+                      pod_events = lg.count("PORTSCAN")
+                      if pod_events > 0:
+                          witness_pods.add(p.metadata.name)
+                          # Add events to window
+                          for _ in range(pod_events):
+                              event_window.append({
+                                  "time": current_time,
+                                  "pod": p.metadata.name,
+                                  "type": "PORTSCAN"
+                              })
+                          new_events += pod_events
+                  except Exception as e:
+                      pass
+              
+              # Current count in window
+              window_count = len(event_window)
+              
+              if window_count >= threshold and not elevated:
+                  elevated = True
+                  ts = datetime.now(timezone.utc).isoformat()
+                  
+                  # Rich elevation data with proper types
+                  elevation_data = {
+                      "elevated": "true",
+                      "ts": ts,
+                      "count": str(window_count),  # Keep as string for ConfigMap
+                      "window_seconds": str(window_seconds),
+                      "threshold": str(threshold),
+                      "witnesses": str(len(witness_pods)),
+                      "witness_pods": ",".join(sorted(list(witness_pods)[:5])),  # First 5 witnesses
+                      "scenario": scenario_id,
+                      "pattern": "lateral-scan",
+                      "confidence": str(min(100, int(window_count / threshold * 50))),
+                      "run_id": run_id
+                  }
+                  
+                  cm = client.V1ConfigMap(
+                      metadata=client.V1ObjectMeta(
+                          name=f"aswarm-elevated-{run_id}",
+                          labels={"type": "elevation", "run_id": run_id}
+                      ),
+                      data=elevation_data
+                  )
+                  
+                  try:
+                      v1.create_namespaced_config_map(ns, cm)
+                      print(json.dumps({
+                          "action": "elevation_created",
+                          "elevated": True,
+                          "ts": ts,
+                          "count": window_count,
+                          "witnesses": len(witness_pods),
+                          "scenario": scenario_id,
+                          "run_id": run_id
+                      }), flush=True)
+                  except client.exceptions.ApiException as e:
+                      if e.status != 409:  # Not already exists
+                          print(f"Error creating elevation: {e}", file=sys.stderr)
+              
+              time.sleep(1)  # Check more frequently for better accuracy
+          PY
+        resources:
+          requests:
+            cpu: "20m"
+            memory: "64Mi"
+          limits:
+            cpu: "100m"
+            memory: "128Mi"

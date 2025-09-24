@@ -1,0 +1,124 @@
+# A-SWARM GitOps Pre-commit Hooks
+# Validates detection rules and Kubernetes manifests before commit
+
+repos:
+  # Standard pre-commit hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-json
+        name: "Validate JSON syntax"
+        files: ^deploy/gitops/detection-rules/.*\.json$
+      - id: check-yaml
+        name: "Validate YAML syntax"
+        files: ^deploy/gitops/.*\.yaml$
+      - id: end-of-file-fixer
+        name: "Fix end of files"
+        files: ^deploy/gitops/
+      - id: trailing-whitespace
+        name: "Remove trailing whitespace"
+        files: ^deploy/gitops/
+      - id: check-merge-conflict
+        name: "Check for merge conflicts"
+
+  # Detection rules validation
+  - repo: local
+    hooks:
+      - id: validate-detection-rules
+        name: "Validate detection rules"
+        entry: python3 deploy/gitops/detection-rules/validate.py
+        language: system
+        files: ^deploy/gitops/detection-rules/detection-rules\.json$
+        args: ["--strict", "--warnings-as-errors"]
+        pass_filenames: true
+        verbose: true
+
+      - id: validate-detection-rules-schema
+        name: "Validate rules against schema"
+        entry: python3 deploy/gitops/detection-rules/validate.py
+        language: system
+        files: ^deploy/gitops/detection-rules/detection-rules\.json$
+        args: ["--schema", "deploy/gitops/detection-rules/schema.json", "--summary"]
+        pass_filenames: true
+
+  # Kubernetes manifest validation
+  - repo: https://github.com/syntaqx/kustomize-lint
+    rev: v1.0.0
+    hooks:
+      - id: kustomize-lint
+        name: "Lint Kustomize manifests"
+        files: ^deploy/gitops/.*kustomization\.yaml$
+
+  # Security scanning
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.4.0
+    hooks:
+      - id: detect-secrets
+        name: "Detect secrets in code"
+        args: ['--baseline', '.secrets.baseline']
+        exclude: |
+          (?x)^(
+            .*\.git/.*|
+            .*test.*|
+            .*\.md$
+          )$
+
+  # Additional validation for production files
+  - repo: local
+    hooks:
+      - id: validate-production-manifests
+        name: "Validate production Kustomize build"
+        entry: bash
+        language: system
+        files: ^deploy/gitops/overlays/production/.*\.yaml$
+        args:
+          - "-c"
+          - |
+            echo "Validating production Kustomize build..."
+            if ! kubectl kustomize deploy/gitops/overlays/production > /dev/null; then
+              echo "❌ Production Kustomize build failed"
+              exit 1
+            fi
+            echo "✅ Production Kustomize build successful"
+
+      - id: validate-development-manifests
+        name: "Validate development Kustomize build"
+        entry: bash
+        language: system
+        files: ^deploy/gitops/overlays/development/.*\.yaml$
+        args:
+          - "-c"
+          - |
+            echo "Validating development Kustomize build..."
+            if ! kubectl kustomize deploy/gitops/overlays/development > /dev/null; then
+              echo "❌ Development Kustomize build failed"
+              exit 1
+            fi
+            echo "✅ Development Kustomize build successful"
+
+  # Optional: Helm validation if using Helm charts
+  # - repo: https://github.com/gruntwork-io/pre-commit
+  #   rev: v0.1.17
+  #   hooks:
+  #     - id: helmlint
+  #       files: ^deploy/helm/.*
+
+# Configuration
+default_language_version:
+  python: python3
+
+# Only run on specific file changes to avoid unnecessary validation
+files: ^deploy/gitops/
+exclude: |
+  (?x)^(
+    .*\.git/.*|
+    .*\.pyc$|
+    .*\.pyo$|
+    .*__pycache__.*
+  )$
+
+# Fail fast - stop on first failure
+fail_fast: true
+
+# Minimum version requirement
+minimum_pre_commit_version: "3.0.0"

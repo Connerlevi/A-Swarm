@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: aswarm-sentinel-fast
+  namespace: aswarm
+  labels:
+    app.kubernetes.io/name: sentinel
+    app.kubernetes.io/component: telemetry
+    aswarm.ai/version: "v0.3"
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sentinel
+      app.kubernetes.io/component: telemetry
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sentinel
+        app.kubernetes.io/component: telemetry
+        aswarm.ai/fastpath: "true"
+    spec:
+      serviceAccountName: aswarm-sa
+      hostNetwork: true  # For eBPF access (future)
+      hostPID: true      # For process monitoring
+      containers:
+      - name: sentinel
+        image: python:3.11-alpine
+        command: ["/bin/sh"]
+        args:
+          - "-c"
+          - |
+            # Install dependencies
+            pip install kubernetes --quiet
+            
+            # Set up Python path
+            export PYTHONPATH=/app:$PYTHONPATH
+            
+            # Create proper module structure
+            mkdir -p /app/sentinel /app/pheromone
+            cp /code/telemetry_v2.py /app/sentinel/
+            cp /code/fast_path.py /app/sentinel/
+            cp /code/__init__.py /app/sentinel/
+            
+            # Also need the prototype path for imports
+            mkdir -p /app/prototype/sentinel
+            cp /code/fast_path.py /app/prototype/sentinel/
+            touch /app/prototype/__init__.py
+            touch /app/prototype/sentinel/__init__.py
+            
+            # Run the telemetry
+            cd /app
+            echo "Starting Sentinel fast-path telemetry..."
+            python -m sentinel.telemetry_v2 \
+              --namespace=$NAMESPACE \
+              --cadence-ms=50 \
+              --fastpath-host=aswarm-pheromone-fast.$NAMESPACE.svc.cluster.local \
+              --fastpath-port=8888
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: ASWARM_FASTPATH_KEY
+          valueFrom:
+            secretKeyRef:
+              name: aswarm-fastpath-key
+              key: key
+              optional: true
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        securityContext:
+          privileged: false
+          capabilities:
+            add:
+              - NET_ADMIN  # For future packet capture
+              - SYS_PTRACE # For process monitoring
+        volumeMounts:
+        - name: code
+          mountPath: /code
+        - name: proc
+          mountPath: /host/proc
+          readOnly: true
+      volumes:
+      - name: code
+        configMap:
+          name: aswarm-sentinel-code
+      - name: proc
+        hostPath:
+          path: /proc
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule

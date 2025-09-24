@@ -1,0 +1,345 @@
+---
+# A-SWARM Certificate Creation RBAC Hardening
+# Restricts who can create/modify certificates in the aswarm namespace
+# Only the A-SWARM operator can create new certificates
+
+# 1) ServiceAccount for A-SWARM Operator
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aswarm-operator
+  namespace: aswarm
+  labels:
+    app.kubernetes.io/part-of: aswarm
+
+---
+# 2) Role for Certificate Management (full lifecycle)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: aswarm-certificate-manager
+  namespace: aswarm
+  labels:
+    app.kubernetes.io/part-of: aswarm
+rules:
+- apiGroups: ["cert-manager.io"]
+  resources: ["certificates"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["cert-manager.io"]
+  resources: ["certificates/status"]
+  verbs: ["get", "update", "patch"]
+- apiGroups: ["cert-manager.io"]
+  resources: ["certificaterequests", "certificaterequests/status"]
+  verbs: ["get", "list", "watch"] # observe the issuance flow
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch"] # cert-manager writes the leaf secrets
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"] # for operator UX
+
+---
+# 3) Read-only role for humans/support
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: aswarm-certificate-viewer
+  namespace: aswarm
+  labels:
+    app.kubernetes.io/part-of: aswarm
+rules:
+- apiGroups: ["cert-manager.io"]
+  resources: ["certificates", "certificaterequests"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["cert-manager.io"]
+  resources: ["certificates/status", "certificaterequests/status"]
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+  resourceNames:
+    - pheromone-tls
+    - sentinel-tls
+    - redswarm-tls
+    - blueswarm-tls
+
+---
+# 4) Bind operator permissions (only operator can create/modify)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: aswarm-operator-certificate-manager
+  namespace: aswarm
+  labels:
+    app.kubernetes.io/part-of: aswarm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: aswarm-certificate-manager
+subjects:
+- kind: ServiceAccount
+  name: aswarm-operator
+  namespace: aswarm
+
+---
+# 5) Optional: Read-only ClusterRole for cross-namespace issuer visibility
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: aswarm-issuer-viewer
+  labels:
+    app.kubernetes.io/part-of: aswarm
+rules:
+- apiGroups: ["cert-manager.io"]
+  resources: ["issuers", "clusterissuers"]
+  verbs: ["get", "list", "watch"]
+
+---
+# 6) cert-manager-approver-policy CertificateRequestPolicy
+# Enforces SPIFFE URI patterns and authorized requesters
+# Note: Requires cert-manager-approver-policy to be installed
+apiVersion: policy.cert-manager.io/v1alpha1
+kind: CertificateRequestPolicy
+metadata:
+  name: aswarm-spiffe-policy
+  namespace: aswarm
+  labels:
+    app.kubernetes.io/part-of: aswarm
+spec:
+  selector:
+    # Apply to all certificate requests in aswarm namespace
+    namespaceSelector:
+      matchNames: ["aswarm"]
+  allowed:
+    # Not a CA certificate
+    isCA: false
+    # DNS names must match our pattern
+    dnsNames:
+      values:
+        - "*.aswarm"
+        - "*.aswarm.svc"
+        - "*.aswarm.svc.cluster.local"
+    # SPIFFE URIs must match our pattern
+    uris:
+      required: true
+      values:
+        - "spiffe://aswarm.local/ns/aswarm/sa/aswarm-*"
+    # Allowed key usages
+    usages:
+      values:
+        - "digital signature"
+        - "key agreement"
+        - "server auth"
+        - "client auth"
+    # Subject constraints
+    subject:
+      organizations:
+        values: ["A-SWARM Security"]
+  # Only the operator SA can request certificates
+  approvedSubjects:
+  - kind: ServiceAccount
+    name: aswarm-operator
+    namespace: aswarm
+
+---
+# 7) Gatekeeper ConstraintTemplate (Alternative enforcement)
+# Use this if you have OPA Gatekeeper instead of approver-policy
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: aswarmcertificaterestriction
+  labels:
+    app.kubernetes.io/part-of: aswarm
+spec:
+  crd:
+    spec:
+      names:
+        kind: ASwarmCertificateRestriction
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            allowedServiceAccounts:
+              type: array
+              items:
+                type: string
+            spiffePattern:
+              type: string
+  targets:
+  - target: admission.k8s.gatekeeper.sh
+    rego: |
+      package aswarm.certificate.restriction
+      
+      violation[{"msg": msg}] {
+        # Only apply to Certificate resources
+        input.review.kind.kind == "Certificate"
+        input.review.kind.group == "cert-manager.io"
+        input.review.object.metadata.namespace == "aswarm"
+        
+        # Skip if this is a cert-manager internal update
+        not startswith(input.review.userInfo.username, "system:serviceaccount:cert-manager:")
+        
+        # Only aswarm-operator can create certificates
+        creator := input.review.userInfo.username
+        allowed := input.parameters.allowedServiceAccounts[_]
+        not creator == allowed
+        
+        msg := sprintf("Only authorized service accounts can create certificates in aswarm namespace. Denied for: %v", [creator])
+      }
+      
+      violation[{"msg": msg}] {
+        # Validate SPIFFE URI format
+        input.review.kind.kind == "Certificate"
+        input.review.kind.group == "cert-manager.io"
+        input.review.object.metadata.namespace == "aswarm"
+        
+        uris := input.review.object.spec.uris
+        pattern := input.parameters.spiffePattern
+        some uri in uris
+        not regex.match(pattern, uri)
+        
+        msg := sprintf("Invalid SPIFFE URI format. Must match pattern: %v. Got: %v", [pattern, uri])
+      }
+
+---
+# 8) Gatekeeper Constraint instance
+apiVersion: aswarmcertificaterestriction.constraints.gatekeeper.sh/v1beta1
+kind: ASwarmCertificateRestriction
+metadata:
+  name: aswarm-certificate-restriction
+  labels:
+    app.kubernetes.io/part-of: aswarm
+spec:
+  match:
+    kinds:
+    - apiGroups: ["cert-manager.io"]
+      kinds: ["Certificate"]
+    namespaces: ["aswarm"]
+    excludedNamespaces: ["cert-manager", "kube-system"]
+  parameters:
+    allowedServiceAccounts:
+    - "system:serviceaccount:aswarm:aswarm-operator"
+    spiffePattern: "^spiffe://aswarm\\.local/ns/aswarm/sa/aswarm-[a-z]+$"
+
+---
+# 9) Admission test Job - validates policy enforcement
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: aswarm-rbac-test
+  namespace: aswarm
+  labels:
+    app.kubernetes.io/part-of: aswarm
+    app.kubernetes.io/component: test
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aswarm-rbac-test
+    spec:
+      restartPolicy: Never
+      serviceAccountName: aswarm-sentinel # Using non-operator SA to test denial
+      containers:
+      - name: test
+        image: bitnami/kubectl:latest
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -euo pipefail
+          echo "=== A-SWARM RBAC Policy Test ==="
+          
+          # Test 1: Non-operator should be denied certificate creation
+          echo "Test 1: Attempting to create certificate as non-operator..."
+          cat <<EOF | kubectl apply -f - 2>&1 | grep -q "forbidden\|denied" && echo "✓ PASS: Non-operator correctly denied" || echo "✗ FAIL: Non-operator was NOT denied"
+          apiVersion: cert-manager.io/v1
+          kind: Certificate
+          metadata:
+            name: test-denied-cert
+            namespace: aswarm
+          spec:
+            secretName: test-denied-tls
+            dnsNames: ["test.aswarm.svc"]
+            uris: ["spiffe://aswarm.local/ns/aswarm/sa/aswarm-test"]
+            issuerRef:
+              name: aswarm-issuer
+              kind: Issuer
+              group: cert-manager.io
+          EOF
+          
+          # Test 2: Invalid SPIFFE URI should be denied (if policies active)
+          echo "Test 2: Attempting to create certificate with invalid SPIFFE URI..."
+          cat <<EOF | kubectl apply -f - 2>&1 | grep -q "forbidden\|denied\|Invalid SPIFFE" && echo "✓ PASS: Invalid SPIFFE URI denied" || echo "○ INFO: SPIFFE validation may not be active"
+          apiVersion: cert-manager.io/v1
+          kind: Certificate
+          metadata:
+            name: test-bad-uri-cert
+            namespace: aswarm
+          spec:
+            secretName: test-bad-uri-tls
+            dnsNames: ["test.aswarm.svc"]
+            uris: ["spiffe://evil.com/bad/uri"]
+            issuerRef:
+              name: aswarm-issuer
+              kind: Issuer
+              group: cert-manager.io
+          EOF
+          
+          # Test 3: Verify read access works
+          echo "Test 3: Testing read access to certificates..."
+          kubectl get certificates -n aswarm >/dev/null 2>&1 && echo "✓ PASS: Read access works" || echo "✗ FAIL: Read access denied"
+          
+          echo "=== RBAC tests complete ==="
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65534
+          capabilities:
+            drop: ["ALL"]
+
+---
+# 10) Documentation ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aswarm-rbac-docs
+  namespace: aswarm
+  labels:
+    app.kubernetes.io/part-of: aswarm
+data:
+  README.md: |
+    # A-SWARM Certificate RBAC Policy
+    
+    ## Overview
+    This namespace implements strict RBAC controls for certificate management:
+    - Only `aswarm-operator` service account can create/modify certificates
+    - All other service accounts have read-only access
+    - SPIFFE URI pattern enforcement (if approver-policy or Gatekeeper active)
+    
+    ## Enforcement Layers
+    1. **Kubernetes RBAC**: Role/RoleBinding restricts create/update/delete
+    2. **cert-manager-approver-policy**: Validates SPIFFE URI patterns (optional)
+    3. **OPA Gatekeeper**: Alternative policy enforcement (optional)
+    
+    ## Testing
+    Run the RBAC test job to validate enforcement:
+    ```bash
+    kubectl create job --from=job/aswarm-rbac-test rbac-test-$(date +%s) -n aswarm
+    ```
+    
+    ## Troubleshooting
+    - Check operator permissions: `kubectl auth can-i create certificates -n aswarm --as system:serviceaccount:aswarm:aswarm-operator`
+    - View policy violations: `kubectl describe certificaterequest -n aswarm`
+    - Check Gatekeeper events: `kubectl get events -n aswarm | grep gatekeeper`

@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: aswarm-blue-api-storage
+  labels:
+    app: aswarm-blue-api
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  # StorageClass will be overridden in overlays if needed
+  # Default uses cluster's default StorageClass

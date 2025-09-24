@@ -1,0 +1,111 @@
+# Cosign admission policy for A-SWARM
+# Use with sigstore/policy-controller for admission control
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aswarm-cosign-policy
+  namespace: cosign-system
+data:
+  policy.yaml: |
+    # Policy for A-SWARM images
+    apiVersion: config.sigstore.dev/v1alpha1
+    kind: ClusterImagePolicy
+    metadata:
+      name: aswarm-image-policy
+    spec:
+      images:
+        # Match all A-SWARM images
+        - glob: "ghcr.io/anthropics/aswarm-*"
+        - glob: "*/aswarm-*"  # For private registries
+      
+      authorities:
+        # Keyless signature verification
+        - name: github-actions-oidc
+          keyless:
+            url: https://fulcio.sigstore.dev
+            identities:
+              # Trust GitHub Actions from our repository
+              - issuer: https://token.actions.githubusercontent.com
+                subject: https://github.com/anthropics/aswarm/.github/workflows/build-and-sign.yml@refs/heads/main
+              - issuer: https://token.actions.githubusercontent.com
+                subjectRegExp: "https://github.com/anthropics/aswarm/.*"
+          
+          # Require attestations
+          attestations:
+            - name: sbom-spdx
+              predicateType: https://spdx.dev/Document
+              policy:
+                type: cue
+                data: |
+                  // Require SPDX version 2.3+
+                  spdxVersion: =~"^SPDX-2\\.[3-9]"
+                  // Require document name
+                  name: string & !=""
+                  // Require creation timestamp
+                  creationInfo: createdBy: [...string] & len(>=1)
+            
+            - name: provenance
+              predicateType: https://slsa.dev/provenance/v0.2
+              policy:
+                type: cue
+                data: |
+                  // Require SLSA v0.2 provenance
+                  builder: id: string & =~"^https://github.com/.*"
+                  buildType: string
+                  invocation: configSource: entryPoint: string
+---
+# Alternative: Key-based verification for air-gapped environments
+apiVersion: v1
+kind: Secret
+metadata:
+  name: aswarm-signing-key
+  namespace: cosign-system
+type: Opaque
+data:
+  # Base64 encoded cosign public key
+  # Generate with: cosign generate-key-pair
+  # Then: cat cosign.pub | base64 -w 0
+  cosign.pub: LS0tLS1CRUdJTi...  # Replace with actual public key
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aswarm-keyed-policy
+  namespace: cosign-system
+data:
+  policy.yaml: |
+    apiVersion: config.sigstore.dev/v1alpha1
+    kind: ClusterImagePolicy
+    metadata:
+      name: aswarm-keyed-policy
+    spec:
+      images:
+        - glob: "*/aswarm-*"
+      authorities:
+        - name: aswarm-key
+          key:
+            data: |
+              -----BEGIN PUBLIC KEY-----
+              # Your actual cosign public key here
+              -----END PUBLIC KEY-----
+---
+# Admission controller configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: config-image-policies
+  namespace: cosign-system
+data:
+  config.yaml: |
+    # Enable image policy enforcement
+    images:
+      # A-SWARM images must be signed
+      "ghcr.io/anthropics/aswarm-*": 
+        - name: "github-actions-oidc"
+      "*/aswarm-*":
+        - name: "aswarm-key"  # For private registries
+    
+    # Global settings
+    only_v2: true
+    warn: true  # Start with warnings, then enforce: false

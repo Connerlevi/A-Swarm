@@ -1,0 +1,98 @@
+{{- if and .Values.global.enabled .Values.microact.enabled -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aswarm.fullname" . }}-microact
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aswarm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: microact
+spec:
+  replicas: {{ .Values.microact.replicas }}
+  selector:
+    matchLabels:
+      {{- include "aswarm.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: microact
+  template:
+    metadata:
+      annotations:
+        checksum/killswitch: {{ include (print $.Template.BasePath "/killswitch-configmap.yaml") . | sha256sum }}
+        checksum/policies: {{ include (print $.Template.BasePath "/policy-configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "aswarm.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: microact
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "aswarm.serviceAccountName" . }}
+      securityContext:
+        fsGroup: 65532
+        runAsNonRoot: true
+      containers:
+        - name: microact
+          securityContext:
+            {{- toYaml .Values.microact.securityContext | nindent 12 }}
+          image: {{ include "aswarm.image" (dict "imageRoot" .Values.microact.image "Values" .Values) }}
+          imagePullPolicy: {{ .Values.microact.image.pullPolicy }}
+          command:
+            - python
+            - -m
+            - actuators.microact_controller
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: ASWARM_KILL_SWITCH
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.killSwitch.configMapName }}
+                  key: state
+            - name: ASWARM_DRY_RUN
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.killSwitch.configMapName }}
+                  key: dryrun.enabled
+            - name: ASWARM_MAX_RING
+              value: {{ .Values.microact.enforcement.maxRing | quote }}
+            - name: ASWARM_DEFAULT_TTL
+              value: {{ .Values.microact.enforcement.defaultTTL | quote }}
+          {{- if .Values.monitoring.prometheus.enabled }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.monitoring.prometheus.port }}
+              protocol: TCP
+          {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.microact.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: policies
+              mountPath: /etc/aswarm/policies
+              readOnly: true
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: policies
+          configMap:
+            name: {{ include "aswarm.fullname" . }}-policies
+{{- end -}}

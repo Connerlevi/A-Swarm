@@ -1,0 +1,180 @@
+syntax = "proto3";
+
+package aswarm.intelligence;
+
+option go_package = "github.com/Connerlevi/A-Swarm/intelligence/pb";
+
+// Python↔Go bridge for evolution operations
+service Evolution {
+  // Evaluate antibody fitness against historical data
+  rpc EvaluateFitness(EvaluateFitnessRequest) returns (EvaluateFitnessResponse);
+
+  // Run one evolution cycle (mutation + selection)
+  rpc EvolveOnce(EvolveOnceRequest) returns (EvolveOnceResponse);
+
+  // Store antibody for tracking
+  rpc StoreAntibody(StoreAntibodyRequest) returns (StoreAntibodyResponse);
+
+  // Get current population state
+  rpc GetPopulation(GetPopulationRequest) returns (GetPopulationResponse);
+
+  // Get evolution metrics
+  rpc GetMetrics(GetMetricsRequest) returns (GetMetricsResponse);
+}
+
+// Antibody definition for evolution
+message Antibody {
+  string id = 1;
+  string spec_hash = 2;
+  map<string, string> spec = 3;  // YAML spec as key-value pairs
+  AntibodyPhase phase = 4;
+  FitnessSummary fitness = 5;
+  int64 generation = 6;
+  string parent_id = 7;
+  repeated string lineage = 8;
+  int64 created_at = 9;
+  int64 updated_at = 10;
+}
+
+enum AntibodyPhase {
+  ANTIBODY_PHASE_UNSPECIFIED = 0;
+  ANTIBODY_PHASE_SHADOW = 1;
+  ANTIBODY_PHASE_STAGED = 2;
+  ANTIBODY_PHASE_CANARY = 3;
+  ANTIBODY_PHASE_ACTIVE = 4;
+  ANTIBODY_PHASE_RETIRED = 5;
+}
+
+message FitnessSummary {
+  double detection_rate = 1;      // [0,1] success rate
+  double false_positive_rate = 2; // [0,1] false alarm rate
+  double latency_p95_ms = 3;      // P95 detection latency
+  double overall_fitness = 4;     // Computed Wilson score
+  int64 total_tests = 5;          // Sample size
+  int64 successful_detections = 6; // Success count
+}
+
+message ExtendedFitnessSummary {
+  FitnessSummary base = 1;
+  double coverage_score = 2;      // Attack pattern coverage [0,1]
+  double safety_score = 3;        // Blast radius safety [0,1]
+  double efficiency_score = 4;    // Resource efficiency [0,1]
+  double extended_fitness = 5;    // Combined extended score
+}
+
+// Evaluate fitness request/response
+message EvaluateFitnessRequest {
+  Antibody antibody = 1;
+  repeated CombatResult combat_results = 2;
+  EvaluationConfig config = 3;
+}
+
+message EvaluateFitnessResponse {
+  ExtendedFitnessSummary fitness = 1;
+  bool should_promote = 2;
+  string reasoning = 3;
+  repeated string warnings = 4;
+}
+
+message CombatResult {
+  string antibody_id = 1;
+  string attack_signature = 2;
+  bool detected = 3;
+  double latency_ms = 4;
+  bool false_positive = 5;
+  string blast_radius = 6;
+  int64 timestamp = 7;
+  map<string, string> metadata = 8;
+}
+
+message EvaluationConfig {
+  double wilson_confidence = 1;   // Wilson score confidence level
+  double latency_penalty = 2;     // Latency penalty factor
+  double safety_weight = 3;       // Safety score weight
+  int32 min_sample_size = 4;      // Minimum tests for evaluation
+}
+
+// Evolution request/response
+message EvolveOnceRequest {
+  EvolutionConfig config = 1;
+  int32 population_size = 2;
+  int32 elite_count = 3;
+  double mutation_rate = 4;
+}
+
+message EvolveOnceResponse {
+  repeated Antibody new_antibodies = 1;
+  EvolutionMetrics metrics = 2;
+  string status = 3;
+  repeated string errors = 4;
+}
+
+message EvolutionConfig {
+  double fitness_threshold = 1;   // Minimum fitness for promotion
+  double diversity_threshold = 2; // Genetic diversity requirement
+  int32 max_generations = 3;      // Generation limit
+  repeated string mutation_strategies = 4; // Available mutation types
+}
+
+message EvolutionMetrics {
+  double best_fitness = 1;
+  double avg_fitness = 2;
+  double diversity_score = 3;
+  int64 generation = 4;
+  int64 population_size = 5;
+  int64 mutations_attempted = 6;
+  int64 successful_mutations = 7;
+}
+
+// Store antibody request/response
+message StoreAntibodyRequest {
+  Antibody antibody = 1;
+  bool update_if_exists = 2;
+}
+
+message StoreAntibodyResponse {
+  bool stored = 1;
+  string antibody_id = 2;
+  repeated string warnings = 3;
+}
+
+// Population query request/response
+message GetPopulationRequest {
+  AntibodyPhase phase_filter = 1;
+  int32 limit = 2;
+  string cursor = 3;
+  bool include_fitness = 4;
+}
+
+message GetPopulationResponse {
+  repeated Antibody antibodies = 1;
+  string next_cursor = 2;
+  int64 total_count = 3;
+  PopulationStats stats = 4;
+}
+
+message PopulationStats {
+  int64 total_antibodies = 1;
+  map<string, int64> by_phase = 2;  // phase -> count
+  double avg_fitness = 3;
+  double best_fitness = 4;
+  int64 current_generation = 5;
+}
+
+// Metrics request/response
+message GetMetricsRequest {
+  int64 since_timestamp = 1;
+  repeated string metric_names = 2;
+}
+
+message GetMetricsResponse {
+  EvolutionMetrics current = 1;
+  repeated HistoricalMetric history = 2;
+  map<string, double> custom_metrics = 3;
+}
+
+message HistoricalMetric {
+  int64 timestamp = 1;
+  EvolutionMetrics metrics = 2;
+  string milestone = 3;  // generation, promotion, etc.
+}

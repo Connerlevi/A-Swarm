@@ -1,0 +1,142 @@
+# Red Team ServiceAccount and minimal RBAC
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aswarm-redswarm
+  namespace: aswarm-redteam
+  labels:
+    aswarm.io/component: redteam
+    aswarm.io/security-level: zero-compromise
+automountServiceAccountToken: false  # Explicit mount only
+---
+# Blue Team ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aswarm-blueswarm
+  namespace: aswarm-blueteam
+  labels:
+    aswarm.io/component: blueteam
+    aswarm.io/security-level: zero-compromise
+automountServiceAccountToken: false
+---
+# Red Team ClusterRole - Create/Delete Pods & NetworkPolicies only
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: aswarm-redswarm-runner
+  labels:
+    aswarm.io/component: redteam
+    aswarm.io/security-level: zero-compromise
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/status", "pods/log"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["networkpolicies"]
+  verbs: ["get", "list", "create", "delete"]
+---
+# Red Team RoleBinding in aswarm-redteam namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: aswarm-redswarm-runner
+  namespace: aswarm-redteam
+  labels:
+    aswarm.io/component: redteam
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: aswarm-redswarm-runner
+subjects:
+- kind: ServiceAccount
+  name: aswarm-redswarm
+  namespace: aswarm-redteam
+---
+# Red Team RoleBinding in aswarm-test namespace (if multi-namespace testing)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: aswarm-redswarm-runner
+  namespace: aswarm-test
+  labels:
+    aswarm.io/component: redteam
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: aswarm-redswarm-runner
+subjects:
+- kind: ServiceAccount
+  name: aswarm-redswarm
+  namespace: aswarm-redteam
+---
+# Blue Team Role - Read-only access to monitor pods/events
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: aswarm-blueswarm-reader
+  namespace: aswarm-redteam
+  labels:
+    aswarm.io/component: blueteam
+rules:
+- apiGroups: [""]
+  resources: ["pods", "events"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["events.k8s.io"]
+  resources: ["events"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods/log"]
+  verbs: ["get"]
+---
+# Blue Team RoleBinding in Red namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: aswarm-blueswarm-reader
+  namespace: aswarm-redteam
+  labels:
+    aswarm.io/component: blueteam
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: aswarm-blueswarm-reader
+subjects:
+- kind: ServiceAccount
+  name: aswarm-blueswarm
+  namespace: aswarm-blueteam
+---
+# Blue Team self Role - Tightened secret access
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: aswarm-blueswarm-self
+  namespace: aswarm-blueteam
+  labels:
+    aswarm.io/component: blueteam
+rules:
+- apiGroups: [""]
+  resources: ["services", "endpoints", "configmaps"]
+  verbs: ["get", "list", "watch"]
+# Restrict secrets to specific names only
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["blueswarm-tls", "blueswarm-identity", "external-secrets-cache"]
+  verbs: ["get"]  # No list/watch on secrets
+---
+# Blue Team self RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: aswarm-blueswarm-self
+  namespace: aswarm-blueteam
+  labels:
+    aswarm.io/component: blueteam
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: aswarm-blueswarm-self
+subjects:
+- kind: ServiceAccount
+  name: aswarm-blueswarm
+  namespace: aswarm-blueteam

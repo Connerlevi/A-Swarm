@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aswarm-redteam
+  labels:
+    name: aswarm-redteam
+    aswarm.io/component: redteam
+    aswarm.io/security-level: zero-compromise
+  annotations:
+    aswarm.io/description: "Dedicated namespace for Red Team adversarial training"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aswarm-blueteam
+  labels:
+    name: aswarm-blueteam
+    aswarm.io/component: blueteam
+    aswarm.io/security-level: zero-compromise
+  annotations:
+    aswarm.io/description: "Dedicated namespace for Blue Team detection services"

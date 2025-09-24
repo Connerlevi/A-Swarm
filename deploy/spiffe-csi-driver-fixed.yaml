@@ -1,0 +1,194 @@
+---
+# SPIFFE CSI Driver - enables workloads to access SPIRE Agent Workload API (FIXED)
+# Deploys cluster-wide to provide CSI volumes for SPIFFE identity
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: csi.spiffe.io
+spec:
+  attachRequired: false
+  podInfoOnMount: true
+  fsGroupPolicy: None
+  volumeLifecycleModes:
+  - Ephemeral
+---
+# CSI Driver ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spiffe-csi-driver
+  namespace: kube-system
+---
+# CSI Driver ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spiffe-csi-driver
+rules:
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+---
+# CSI Driver ClusterRoleBinding  
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: spiffe-csi-driver
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: spiffe-csi-driver
+subjects:
+- kind: ServiceAccount
+  name: spiffe-csi-driver
+  namespace: kube-system
+---
+# SPIFFE CSI Driver DaemonSet
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: spiffe-csi-driver
+  namespace: kube-system
+  labels:
+    app: spiffe-csi-driver
+spec:
+  selector:
+    matchLabels:
+      app: spiffe-csi-driver
+  template:
+    metadata:
+      labels:
+        app: spiffe-csi-driver
+    spec:
+      serviceAccountName: spiffe-csi-driver
+      nodeSelector:
+        kubernetes.io/os: linux
+      tolerations:
+      - key: "node-role.kubernetes.io/master"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+      containers:
+      - name: spiffe-csi-driver
+        image: ghcr.io/spiffe/spiffe-csi-driver:0.3.0
+        args:
+        - --workload-api-socket-dir=/var/run/spire/agent
+        - --csi-socket-path=/var/lib/kubelet/plugins/csi.spiffe.io/csi.sock
+        - --health-port=9809
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        securityContext:
+          privileged: true
+          allowPrivilegeEscalation: true
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+        ports:
+        - containerPort: 9809
+          name: healthz
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: healthz
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: healthz
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        volumeMounts:
+        - name: spire-agent-socket-dir
+          mountPath: /var/run/spire/agent
+          readOnly: true
+        - name: kubelet-root-dir
+          mountPath: /var/lib/kubelet
+          mountPropagation: Bidirectional
+        - name: kubelet-plugin-dir
+          mountPath: /var/lib/kubelet/plugins/csi.spiffe.io
+        - name: kubelet-plugin-registration-dir
+          mountPath: /registration
+        resources:
+          requests:
+            cpu: 50m
+            memory: 32Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+      - name: node-driver-registrar
+        image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.9.0
+        args:
+        - --csi-address=/csi/csi.sock
+        - --kubelet-registration-path=/var/lib/kubelet/plugins/csi.spiffe.io/csi.sock
+        - --health-port=9808
+        ports:
+        - containerPort: 9808
+          name: healthz
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: healthz
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - name: kubelet-plugin-dir
+          mountPath: /csi
+        - name: kubelet-plugin-registration-dir
+          mountPath: /registration
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
+      volumes:
+      - name: spire-agent-socket-dir
+        hostPath:
+          path: /var/run/spire/agent
+          type: DirectoryOrCreate
+      - name: kubelet-root-dir
+        hostPath:
+          path: /var/lib/kubelet
+          type: Directory
+      - name: kubelet-plugin-dir
+        hostPath:
+          path: /var/lib/kubelet/plugins/csi.spiffe.io
+          type: DirectoryOrCreate
+      - name: kubelet-plugin-registration-dir
+        hostPath:
+          path: /var/lib/kubelet/plugins_registry
+          type: Directory
+---
+# CSI Driver Service for monitoring
+apiVersion: v1
+kind: Service
+metadata:
+  name: spiffe-csi-driver-metrics
+  namespace: kube-system
+  labels:
+    app: spiffe-csi-driver
+spec:
+  selector:
+    app: spiffe-csi-driver
+  ports:
+  - name: healthz
+    port: 9809
+    targetPort: 9809
+    protocol: TCP

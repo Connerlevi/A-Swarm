@@ -1,0 +1,16 @@
+policies:
+  - id: rate-limit-egress
+    ring: 1
+    action: iptables_rate_limit
+    params: { iface: eth0, rate: "1mbit", ttl_seconds: 60 }
+    revert: true
+  - id: quarantine-vlan
+    ring: 1
+    action: switch_vlan_isolate
+    params: { vlan_id: 3999, ttl_seconds: 120 }
+    revert: true
+  - id: revoke-token
+    ring: 1
+    action: revoke_service_token
+    params: { principal: "{{process_owner}}" }
+    revert: true

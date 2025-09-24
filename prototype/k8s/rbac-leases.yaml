@@ -1,0 +1,52 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aswarm-sentinel-v2
+  namespace: aswarm
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: aswarm
+  name: aswarm-lease-manager
+rules:
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: aswarm-lease-binding
+  namespace: aswarm
+subjects:
+- kind: ServiceAccount
+  name: aswarm-sentinel-v2
+  namespace: aswarm
+roleRef:
+  kind: Role
+  name: aswarm-lease-manager
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding  
+metadata:
+  name: aswarm-pheromone-binding
+  namespace: aswarm
+subjects:
+- kind: ServiceAccount
+  name: aswarm-pheromone-v2
+  namespace: aswarm
+roleRef:
+  kind: Role
+  name: aswarm-lease-manager
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aswarm-pheromone-v2
+  namespace: aswarm
