@@ -1,0 +1,64 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: aswarm-blue-api-dev
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: aswarm-blue-api
+    app.kubernetes.io/component: blue-api
+    app.kubernetes.io/part-of: aswarm
+    environment: development
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: aswarm  # Use dedicated project, not default
+  source:
+    repoURL: https://github.com/your-org/A-SWARM.git  # TODO: Update with actual repo
+    path: deploy/gitops/overlays/development
+    targetRevision: develop  # Use develop branch for development environment
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: aswarm-dev  # Environment-specific namespace
+  syncPolicy:
+    automated:
+      prune: true        # Remove resources not in Git
+      selfHeal: true     # Auto-sync on manual changes
+    syncOptions:
+      - CreateNamespace=true
+      - PruneLast=true   # Delete resources after new ones ready
+      - ApplyOutOfSyncOnly=true  # Only apply resources that are out of sync
+      - ServerSideApply=true  # Use server-side apply for better conflict resolution
+      - RespectIgnoreDifferences=true  # Honor ignoreDifferences during sync
+      - PrunePropagationPolicy=background  # Non-blocking deletion
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+  revisionHistoryLimit: 10
+  ignoreDifferences:
+    # Ignore differences in replicas (allow HPA control)
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+    # Ignore annotations managed by other controllers
+    - group: ""
+      kind: ConfigMap
+      managedFieldsManagers:
+        - kustomize-controller
+    # Ignore ESO-managed secret fields
+    - group: ""
+      kind: Secret
+      managedFieldsManagers:
+        - external-secrets
+  info:
+    - name: "Runbook"
+      value: "https://wiki.internal/aswarm/runbooks/blue-api"
+    - name: "Grafana"
+      value: "https://grafana.internal/d/aswarm-dev"
+    - name: "Prometheus"
+      value: "https://prometheus.internal/graph?g0.expr=up{job='aswarm-blue-api'}"
+    - name: "Logs"
+      value: "https://kibana.internal/app/discover#/?_q=(kubernetes.namespace:aswarm-dev)"

@@ -1,0 +1,164 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: aswarm
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: aswarm
+  annotations:
+    description: "A-SWARM detection and response platform"
+spec:
+  description: "A-SWARM applications for automated threat detection and response"
+  
+  # Source repositories
+  sourceRepos:
+    - 'https://github.com/Connerlevi/A-Swarm.git'
+    # Add other repos if using Helm charts or separate config repos
+    # - 'https://github.com/your-org/aswarm-config.git'
+  
+  # Destination clusters and namespaces (whitelist only)
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: aswarm
+    - server: https://kubernetes.default.svc
+      namespace: aswarm-dev
+    - server: https://kubernetes.default.svc
+      namespace: aswarm-prod
+  
+  # Cluster resource whitelist
+  clusterResourceWhitelist:
+    # Only allow namespace creation if needed
+    - group: ''
+      kind: Namespace
+  
+  # Cluster resource blacklist
+  clusterResourceBlacklist:
+    # Prevent privilege escalation
+    - group: 'rbac.authorization.k8s.io'
+      kind: ClusterRole
+    - group: 'rbac.authorization.k8s.io'
+      kind: ClusterRoleBinding
+    # PSP is deprecated in k8s 1.25+, omit if not needed
+    # - group: 'policy'
+    #   kind: PodSecurityPolicy
+  
+  # Namespace resource whitelist - what can be deployed
+  namespaceResourceWhitelist:
+    # Core resources
+    - group: ''
+      kind: ConfigMap
+    - group: ''
+      kind: Secret
+    - group: ''
+      kind: Service
+    - group: ''
+      kind: ServiceAccount
+    - group: ''
+      kind: PersistentVolumeClaim
+    # Workload resources
+    - group: 'apps'
+      kind: Deployment
+    - group: 'apps'
+      kind: StatefulSet
+    - group: 'apps'
+      kind: DaemonSet
+    - group: 'batch'
+      kind: Job
+    - group: 'batch'
+      kind: CronJob
+    # Networking
+    - group: 'networking.k8s.io'
+      kind: Ingress
+    - group: 'networking.k8s.io'
+      kind: NetworkPolicy
+    # Autoscaling
+    - group: 'autoscaling'
+      kind: HorizontalPodAutoscaler
+    - group: 'policy'
+      kind: PodDisruptionBudget
+    # RBAC (namespace-scoped only)
+    - group: 'rbac.authorization.k8s.io'
+      kind: Role
+    - group: 'rbac.authorization.k8s.io'
+      kind: RoleBinding
+    # External Secrets Operator
+    - group: 'external-secrets.io'
+      kind: SecretStore
+    - group: 'external-secrets.io'
+      kind: ExternalSecret
+    # Service mesh (if using Istio)
+    # - group: 'networking.istio.io'
+    #   kind: VirtualService
+    # - group: 'networking.istio.io'
+    #   kind: DestinationRule
+  
+  # Roles for this project
+  roles:
+    # Developer role - can sync and view applications
+    - name: developer
+      policies:
+        - p, proj:aswarm:developer, applications, get, aswarm/*, allow
+        - p, proj:aswarm:developer, applications, sync, aswarm/*, allow
+        - p, proj:aswarm:developer, applications, action/*, aswarm/*, allow
+        - p, proj:aswarm:developer, logs, get, aswarm/*, allow
+      groups:
+        - your-org:aswarm-developers  # GitHub team (verify OIDC claim mapping)
+        # - aswarm-developers  # OIDC group
+    
+    # Operator role - full app control, limited repo access
+    - name: operator
+      policies:
+        - p, proj:aswarm:operator, applications, *, aswarm/*, allow
+        - p, proj:aswarm:operator, applications, delete, aswarm/*-prod, deny  # Protect prod
+        - p, proj:aswarm:operator, repositories, get, *, allow  # Read-only repo access
+        - p, proj:aswarm:operator, clusters, get, *, allow
+      groups:
+        - your-org:aswarm-operators
+    
+    # Admin role - full control
+    - name: admin
+      policies:
+        - p, proj:aswarm:admin, *, *, aswarm/*, allow
+      groups:
+        - your-org:aswarm-admins
+    
+    # CI/CD role - for automation (generate tokens operationally)
+    - name: ci-cd
+      policies:
+        - p, proj:aswarm:ci-cd, applications, get, aswarm/*, allow
+        - p, proj:aswarm:ci-cd, applications, sync, aswarm/*, allow
+        - p, proj:aswarm:ci-cd, applications, update, aswarm/*, allow
+      # Generate tokens with: argocd proj role create-token aswarm ci-cd
+  
+  # Sync windows (optional - uncomment for maintenance windows)
+  # syncWindows:
+  #   - kind: deny
+  #     schedule: "0 0 * * 0"  # Sunday midnight
+  #     duration: 2h
+  #     manualSync: true
+  #     applications:
+  #       - "*-prod"
+  #   - kind: allow
+  #     schedule: "0 2 * * 1-5"  # Weekdays 2 AM
+  #     duration: 4h
+  #     manualSync: false
+  #     applications:
+  #       - "*-dev"
+  
+  # Orphaned resources monitoring
+  orphanedResources:
+    warn: true  # Warn about resources not in Git
+    ignore:
+      # Ignore ESO-managed secrets to reduce noise
+      - group: ""
+        kind: Secret
+        name: "aswarm-*-sealed"  # Pattern for ESO secrets
+  
+  # Additional metadata
+  info:
+    - name: "Team Slack"
+      value: "#aswarm-alerts"
+    - name: "Documentation"
+      value: "https://wiki.internal/aswarm"
+    - name: "On-Call"
+      value: "https://pagerduty.internal/aswarm"

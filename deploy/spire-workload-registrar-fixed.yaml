@@ -1,0 +1,283 @@
+---
+# SPIRE Kubernetes Workload Registrar (FIXED)
+# Automatically creates SPIFFE entries based on K8s namespace/serviceaccount/labels
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spire-k8s-workload-registrar
+  namespace: spire-system
+---
+# Registrar ClusterRole - complete permissions
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spire-k8s-workload-registrar
+rules:
+- apiGroups: [""]
+  resources: ["pods", "namespaces", "nodes", "endpoints", "serviceaccounts", "events"]
+  verbs: ["get", "list", "watch"]
+---
+# Registrar ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: spire-k8s-workload-registrar
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: spire-k8s-workload-registrar
+subjects:
+- kind: ServiceAccount
+  name: spire-k8s-workload-registrar
+  namespace: spire-system
+---
+# Registrar Deployment - using gRPC + CSI
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spire-k8s-workload-registrar
+  namespace: spire-system
+  labels:
+    app: spire-k8s-workload-registrar
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spire-k8s-workload-registrar
+  template:
+    metadata:
+      labels:
+        app: spire-k8s-workload-registrar
+    spec:
+      serviceAccountName: spire-k8s-workload-registrar
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+      containers:
+      - name: registrar
+        image: ghcr.io/spiffe/k8s-workload-registrar:1.9.0
+        args:
+        # Use explicit flags for clarity and compatibility
+        - -mode=reconcile
+        - -serverAddr=spire-server.spire-system.svc.cluster.local
+        - -serverPort=8081
+        - -cluster=aswarm-cluster
+        - -agentSocketPath=/spiffe-workload-api/spire-agent.sock
+        - -metrics-addr=:8080
+        - -webhook-enabled=false
+        # Identity templating with A-SWARM structure
+        - -pod-controller
+        - -identity-template=ns/{{.Pod.Namespace}}/sa/{{.Pod.ServiceAccount}}
+        - -identity-template-label=spiffe.io/spiffe-id
+        - -pod-label=spiffe.io/spiffe-id
+        # Additional selectors for A-SWARM workload types
+        - -pod-annotation=aswarm.io/workload-type=workload_type/{{ index .Pod.Annotations "aswarm.io/workload-type" }}
+        - -pod-annotation=aswarm.io/cluster-id=cluster/{{ index .Pod.Annotations "aswarm.io/cluster-id" }}
+        - -pod-annotation=aswarm.io/node-id=node/{{ index .Pod.Annotations "aswarm.io/node-id" }}
+        env:
+        - name: SPIFFE_ENDPOINT_SOCKET
+          value: unix:///spiffe-workload-api/spire-agent.sock
+        ports:
+        - containerPort: 8080
+          name: metrics
+          protocol: TCP
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+        - name: spiffe-workload-api
+          mountPath: /spiffe-workload-api
+          readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /metrics
+            port: metrics
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /metrics
+            port: metrics
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+      volumes:
+      - name: spiffe-workload-api
+        csi:
+          driver: csi.spiffe.io
+          readOnly: true
+---
+# NetworkPolicy - Allow registrar to talk to SPIRE server
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: spire-server-allow-registrar
+  namespace: spire-system
+spec:
+  podSelector:
+    matchLabels:
+      app: spire-server
+  policyTypes: ["Ingress"]
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: spire-k8s-workload-registrar
+    ports:
+    - protocol: TCP
+      port: 8081
+---
+# Example: How to mount SPIFFE CSI in A-SWARM workloads
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aswarm-spiffe-integration-example
+  namespace: spire-system
+data:
+  pheromone-deployment-snippet.yaml: |
+    # Add this to pheromone/sentinel/api deployments:
+    spec:
+      serviceAccountName: aswarm-pheromone
+      template:
+        metadata:
+          labels:
+            app: aswarm-pheromone
+            spiffe.io/spiffe-id: "true"
+          annotations:
+            aswarm.io/workload-type: "pheromone"
+            aswarm.io/cluster-id: "default"
+        spec:
+          containers:
+          - name: pheromone
+            env:
+            - name: SPIFFE_ENDPOINT_SOCKET
+              value: unix:///spiffe-workload-api/spire-agent.sock
+            # Optional: for libraries that use different env var
+            - name: SPIFFE_WORKLOAD_ENDPOINT
+              value: unix:///spiffe-workload-api/spire-agent.sock
+            volumeMounts:
+            - name: spiffe-workload-api
+              mountPath: /spiffe-workload-api
+              readOnly: true
+          volumes:
+          - name: spiffe-workload-api
+            csi:
+              driver: csi.spiffe.io
+              readOnly: true
+  
+  sentinel-daemonset-snippet.yaml: |
+    # Add this to sentinel DaemonSet:
+    spec:
+      serviceAccountName: aswarm-sentinel
+      template:
+        metadata:
+          labels:
+            app: aswarm-sentinel
+            spiffe.io/spiffe-id: "true"
+          annotations:
+            aswarm.io/workload-type: "sentinel"
+            aswarm.io/cluster-id: "default"
+            # Node ID can be dynamic
+            aswarm.io/node-id: "{{ .NodeName }}"
+        spec:
+          containers:
+          - name: sentinel
+            env:
+            - name: SPIFFE_ENDPOINT_SOCKET
+              value: unix:///spiffe-workload-api/spire-agent.sock
+            volumeMounts:
+            - name: spiffe-workload-api
+              mountPath: /spiffe-workload-api
+              readOnly: true
+          volumes:
+          - name: spiffe-workload-api
+            csi:
+              driver: csi.spiffe.io
+              readOnly: true
+
+  expected-spiffe-ids.txt: |
+    # With the identity template and annotations above, expect:
+    
+    # Base identity (from template):
+    spiffe://aswarm.local/ns/aswarm/sa/aswarm-pheromone
+    
+    # With workload-type annotation:
+    spiffe://aswarm.local/ns/aswarm/sa/aswarm-pheromone/workload_type/pheromone
+    
+    # With cluster-id annotation:
+    spiffe://aswarm.local/ns/aswarm/sa/aswarm-pheromone/cluster/default
+    
+    # Sentinel with node-id:
+    spiffe://aswarm.local/ns/aswarm/sa/aswarm-sentinel/workload_type/sentinel/node/{node-name}
+---
+# Service monitor for Prometheus scraping
+apiVersion: v1
+kind: Service
+metadata:
+  name: spire-k8s-workload-registrar-metrics
+  namespace: spire-system
+  labels:
+    app: spire-k8s-workload-registrar
+spec:
+  selector:
+    app: spire-k8s-workload-registrar
+  ports:
+  - name: metrics
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+---
+# Sanity check Job - verify SPIFFE entries after deployment
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: spire-verify-entries
+  namespace: spire-system
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      serviceAccountName: default
+      restartPolicy: OnFailure
+      containers:
+      - name: verify
+        image: ghcr.io/spiffe/spire-agent:1.9.0
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Waiting for SPIFFE entries to be created..."
+          sleep 30
+          
+          echo "Fetching SVID to verify workload API access..."
+          spire-agent api fetch x509 \
+            -socketPath /spiffe-workload-api/spire-agent.sock || \
+            echo "Failed to fetch SVID - check CSI driver mounting"
+          
+          echo "Verification complete"
+        env:
+        - name: SPIFFE_ENDPOINT_SOCKET
+          value: unix:///spiffe-workload-api/spire-agent.sock
+        volumeMounts:
+        - name: spiffe-workload-api
+          mountPath: /spiffe-workload-api
+          readOnly: true
+      volumes:
+      - name: spiffe-workload-api
+        csi:
+          driver: csi.spiffe.io
+          readOnly: true

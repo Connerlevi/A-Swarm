@@ -1,0 +1,62 @@
+groups:
+- name: aswarm-availability
+  rules:
+  # Recording rules for target health
+  - record: aswarm:targets_up:sum
+    expr: sum(up{job=~"^aswarm.*$"}) by (job, service)
+
+  - record: aswarm:targets_total:sum
+    expr: count(up{job=~"^aswarm.*$"}) by (job, service)
+
+  - record: aswarm:targets_up_ratio
+    expr: clamp_max(
+            aswarm:targets_up:sum / ignoring(instance) aswarm:targets_total:sum,
+            1
+          ) or on() vector(0)
+
+  - record: aswarm:targets_up_ratio_global
+    expr: sum(aswarm:targets_up:sum) / sum(aswarm:targets_total:sum)
+
+  # Alert when no targets are being scraped at all
+  - alert: AswarmTargetsAbsent
+    expr: absent(up{job=~"^aswarm.*$"})
+    for: 2m
+    labels:
+      severity: critical
+    annotations:
+      summary: "No A-SWARM targets found"
+      description: "Prometheus sees no targets for jobs matching ^aswarm.*$ for >2m"
+      runbook_url: "file:///runbooks/targets-absent.md"
+
+  # Alert when a specific service has no healthy targets
+  - alert: AswarmTargetDown
+    expr: aswarm:targets_up:sum < 1
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: "A-SWARM target down ({{ $labels.job }}/{{ $labels.service }})"
+      description: "No healthy targets for {{ $labels.job }}/{{ $labels.service }} for >2m"
+      runbook_url: "file:///runbooks/{{ $labels.service }}-down.md"
+
+  # Warning tier for degraded availability
+  - alert: AswarmTargetDegraded
+    expr: aswarm:targets_up_ratio < 0.95
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "A-SWARM service degraded ({{ $labels.job }}/{{ $labels.service }})"
+      description: "{{ $labels.job }}/{{ $labels.service }} availability {{ $value | humanizePercentage }} < 95% for 5m"
+      runbook_url: "file:///runbooks/{{ $labels.service }}-degraded.md"
+
+  # Critical tier for severely degraded availability
+  - alert: AswarmTargetSeverelyDegraded
+    expr: aswarm:targets_up_ratio < 0.80
+    for: 2m
+    labels:
+      severity: critical
+    annotations:
+      summary: "A-SWARM service severely degraded ({{ $labels.job }}/{{ $labels.service }})"
+      description: "{{ $labels.job }}/{{ $labels.service }} availability {{ $value | humanizePercentage }} < 80% for 2m"
+      runbook_url: "file:///runbooks/{{ $labels.service }}-severely-degraded.md"

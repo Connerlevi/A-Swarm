@@ -1,0 +1,46 @@
+# cert-manager values override for Docker Desktop development
+# Relaxes security constraints that cause issues on Docker Desktop
+# WARNING: Dev-only configuration - DO NOT use in production!
+
+# Keep CRDs in chart for convenience
+installCRDs: true
+
+# Fix for main controller on Docker Desktop
+securityContext:
+  runAsNonRoot: false
+  runAsUser: 0
+
+# Resources for controller
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    cpu: 100m
+    memory: 128Mi
+
+# Fix for cainjector on Docker Desktop
+cainjector:
+  securityContext:
+    runAsNonRoot: false
+    runAsUser: 0
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+# Fix for webhook on Docker Desktop
+webhook:
+  securityContext:
+    runAsNonRoot: false
+    runAsUser: 0
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi

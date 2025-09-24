@@ -1,0 +1,192 @@
+{
+  "metadata": {
+    "name": "aswarm-detection-rules",
+    "version": "2.0.0",
+    "schema_version": "1.1.0",
+    "content_type": "detection-rules",
+    "created": "2025-01-10T00:00:00Z",
+    "author": "aswarm-team",
+    "defaults": {
+      "window_seconds": 300,
+      "cooldown_seconds": 60
+    }
+  },
+  "content": {
+    "detection_rules": [
+      {
+        "rule_uuid": "6f2d7d23-2a3a-4e2b-93c1-0f0f2c8b9e01",
+        "id": "privilege-escalation",
+        "name": "Privilege Escalation Detection",
+        "description": "Detects privilege escalation attempts via sudo, setuid, or capability changes",
+        "query": "privilege_escalation OR escalation OR sudo OR setuid",
+        "severity": "critical",
+        "enabled": true,
+        "threshold": 0.4,
+        "window_seconds": 300,
+        "cooldown_seconds": 60,
+        "metadata": {
+          "mitre_technique": "T1068",
+          "mitre_tactic": "Privilege Escalation",
+          "data_sources": ["process", "auth", "kernel"],
+          "owner": "blue-team",
+          "references": [
+            "https://attack.mitre.org/techniques/T1068/",
+            "https://www.sudo.ws/security/advisories/"
+          ]
+        },
+        "tests": [
+          {
+            "name": "benign_login",
+            "event": {"message": "user login successful"},
+            "should_match": false
+          },
+          {
+            "name": "sudo_escalation",
+            "event": {"message": "sudo -n true privilege_escalation detected"},
+            "should_match": true
+          }
+        ]
+      },
+      {
+        "rule_uuid": "8a4e5c91-7b3d-4f2e-a1c9-3d8b7e6f5a4c",
+        "id": "lateral-movement",
+        "name": "Lateral Movement Detection",
+        "description": "Detects lateral movement via SSH, RDP, SMB, or WinRM",
+        "query": "lateral_movement OR pivot OR ssh_anomaly OR rdp_brute",
+        "severity": "high",
+        "enabled": true,
+        "threshold": 0.6,
+        "window_seconds": 600,
+        "cooldown_seconds": 120,
+        "metadata": {
+          "mitre_technique": "T1021",
+          "mitre_sub_technique": "T1021.001",
+          "mitre_tactic": "Lateral Movement",
+          "data_sources": ["network", "auth", "process"],
+          "owner": "blue-team",
+          "references": [
+            "https://attack.mitre.org/techniques/T1021/",
+            "https://attack.mitre.org/techniques/T1021/001/"
+          ]
+        },
+        "tests": [
+          {
+            "name": "normal_ssh",
+            "event": {"message": "ssh connection from known host"},
+            "should_match": false
+          },
+          {
+            "name": "suspicious_pivot",
+            "event": {"message": "lateral_movement detected via compromised host"},
+            "should_match": true
+          }
+        ]
+      },
+      {
+        "rule_uuid": "b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e",
+        "id": "data-exfiltration",
+        "name": "Data Exfiltration Detection",
+        "description": "Detects data exfiltration via DNS tunneling, large transfers, or cloud uploads",
+        "query": "exfiltration OR data_theft OR dns_tunnel OR s3_upload_spike",
+        "severity": "critical",
+        "enabled": true,
+        "threshold": 0.7,
+        "window_seconds": 900,
+        "cooldown_seconds": 300,
+        "metadata": {
+          "mitre_technique": "T1041",
+          "mitre_tactic": "Exfiltration",
+          "data_sources": ["network", "dns", "cloud"],
+          "owner": "blue-team",
+          "references": [
+            "https://attack.mitre.org/techniques/T1041/",
+            "https://www.cisa.gov/news-events/alerts/2023/08/24/cisa-releases-guidance-defending-against-data-exfiltration"
+          ]
+        },
+        "tests": [
+          {
+            "name": "normal_backup",
+            "event": {"message": "scheduled backup to S3"},
+            "should_match": false
+          },
+          {
+            "name": "dns_exfil",
+            "event": {"message": "dns_tunnel exfiltration detected to suspicious domain"},
+            "should_match": true
+          }
+        ]
+      },
+      {
+        "rule_uuid": "c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f",
+        "id": "persistence",
+        "name": "Persistence Mechanism Detection",
+        "description": "Detects persistence via cron, systemd, registry keys, or startup scripts",
+        "query": "persistence OR backdoor OR cronjob_added OR registry_run_key",
+        "severity": "high",
+        "enabled": true,
+        "threshold": 0.6,
+        "window_seconds": 600,
+        "cooldown_seconds": 180,
+        "metadata": {
+          "mitre_technique": "T1136",
+          "mitre_sub_technique": "T1136.001",
+          "mitre_tactic": "Persistence",
+          "data_sources": ["process", "file", "registry"],
+          "owner": "blue-team",
+          "references": [
+            "https://attack.mitre.org/techniques/T1136/",
+            "https://attack.mitre.org/techniques/T1136/001/"
+          ]
+        },
+        "tests": [
+          {
+            "name": "legitimate_cron",
+            "event": {"message": "crontab updated by sysadmin"},
+            "should_match": false
+          },
+          {
+            "name": "malicious_backdoor",
+            "event": {"message": "backdoor persistence mechanism installed"},
+            "should_match": true
+          }
+        ]
+      },
+      {
+        "rule_uuid": "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a",
+        "id": "command-control",
+        "name": "Command and Control Detection",
+        "description": "Detects C2 beaconing, DNS queries to known bad domains, or encrypted channels",
+        "query": "c2_beacon OR command_control OR cobalt_strike OR empire_beacon",
+        "severity": "critical",
+        "enabled": true,
+        "threshold": 0.8,
+        "window_seconds": 1800,
+        "cooldown_seconds": 600,
+        "metadata": {
+          "mitre_technique": "T1071",
+          "mitre_sub_technique": "T1071.001",
+          "mitre_tactic": "Command and Control",
+          "data_sources": ["network", "dns", "process"],
+          "owner": "blue-team",
+          "references": [
+            "https://attack.mitre.org/techniques/T1071/",
+            "https://attack.mitre.org/techniques/T1071/001/",
+            "https://www.cobaltstrike.com/blog/cobalt-strike-detection/"
+          ]
+        },
+        "tests": [
+          {
+            "name": "legitimate_api",
+            "event": {"message": "API call to known service endpoint"},
+            "should_match": false
+          },
+          {
+            "name": "c2_beacon",
+            "event": {"message": "c2_beacon detected with jitter pattern"},
+            "should_match": true
+          }
+        ]
+      }
+    ]
+  }
+}

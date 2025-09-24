@@ -1,0 +1,108 @@
+global:
+  scrape_interval: ${PROMETHEUS_SCRAPE_INTERVAL:-15s}
+  evaluation_interval: ${PROMETHEUS_EVAL_INTERVAL:-15s}
+  scrape_timeout: ${PROMETHEUS_SCRAPE_TIMEOUT:-10s}
+  external_labels:
+    env: ${ENV:-dev}
+    cluster: ${CLUSTER:-pilot}
+
+rule_files:
+  - "/etc/prometheus/rules/*.yml"
+
+scrape_configs:
+  # --- A-SWARM Core Services ---
+  - job_name: 'aswarm-api'
+    metrics_path: /metrics
+    scrape_interval: ${PROMETHEUS_SCRAPE_INTERVAL:-15s}
+    honor_labels: false
+    static_configs:
+      - targets: ['api:9000']
+        labels: { service: "api" }
+    relabel_configs:
+      - target_label: job
+        replacement: "aswarm"
+      - target_label: cluster
+        replacement: ${CLUSTER:-pilot}
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'go_.+|process_.+|python_.+'
+        action: keep
+      - source_labels: [__name__]
+        regex: 'aswarm_.*'
+        action: keep
+      - action: drop
+
+  - job_name: 'aswarm-evolution'
+    metrics_path: /metrics
+    scrape_interval: ${PROMETHEUS_SCRAPE_INTERVAL:-15s}
+    honor_labels: false
+    static_configs:
+      - targets: ['evolution:9000']
+        labels: { service: "evolution" }
+    relabel_configs:
+      - target_label: job
+        replacement: "aswarm"
+      - target_label: cluster
+        replacement: ${CLUSTER:-pilot}
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'go_.+|process_.+|python_.+'
+        action: keep
+      - source_labels: [__name__]
+        regex: 'aswarm_.*'
+        action: keep
+      - action: drop
+
+  - job_name: 'aswarm-federation'
+    metrics_path: /metrics
+    scrape_interval: ${PROMETHEUS_SCRAPE_INTERVAL:-15s}
+    honor_labels: false
+    static_configs:
+      - targets: ['federation:9000']
+        labels: { service: "federation" }
+    relabel_configs:
+      - target_label: job
+        replacement: "aswarm"
+      - target_label: cluster
+        replacement: ${CLUSTER:-pilot}
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'go_.+|process_.+|python_.+'
+        action: keep
+      - source_labels: [__name__]
+        regex: 'aswarm_.*'
+        action: keep
+      - action: drop
+
+  - job_name: 'aswarm-udp-listener'
+    metrics_path: /metrics
+    # Slightly faster to catch queue spikes quicker
+    scrape_interval: ${ASWARM_FAST_SCRAPE_INTERVAL:-10s}
+    honor_labels: false
+    static_configs:
+      - targets: ['udp-listener:9000']
+        labels: { service: "udp-listener" }
+    relabel_configs:
+      - target_label: job
+        replacement: "aswarm"
+      - target_label: cluster
+        replacement: ${CLUSTER:-pilot}
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'go_.+|process_.+|python_.+'
+        action: keep
+      - source_labels: [__name__]
+        regex: 'aswarm_.*'
+        action: keep
+      - action: drop
+
+  # --- Infrastructure ---
+  - job_name: 'prometheus'
+    metrics_path: /metrics
+    scrape_interval: ${PROMETHEUS_SCRAPE_INTERVAL:-15s}
+    static_configs:
+      - targets: ['prometheus:9090']
+        labels: { service: "prometheus" }
+    relabel_configs:
+      - target_label: cluster
+        replacement: ${CLUSTER:-pilot}

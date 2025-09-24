@@ -1,0 +1,294 @@
+syntax = "proto3";
+
+package aswarm.federation;
+
+option go_package = "github.com/a-swarm/prototype/federation";
+
+// Core federation service for secure cross-cluster communication
+service Federator {
+  // Share HLL sketch with Byzantine verification
+  rpc ShareSketch(ShareSketchRequest) returns (ShareSketchResponse);
+
+  // Request sketch from peer with attestation
+  rpc RequestSketch(RequestSketchRequest) returns (RequestSketchResponse);
+
+  // Report cluster health and capability
+  rpc ReportHealth(HealthReportRequest) returns (HealthReportResponse);
+
+  // Bidirectional stream for real-time federation updates
+  rpc FederationStream(stream FederationMessage) returns (stream FederationMessage);
+}
+
+// Enums for type safety and interoperability
+enum AntibodyPhase {
+  PHASE_UNKNOWN = 0;
+  PHASE_SHADOW = 1;
+  PHASE_STAGED = 2;
+  PHASE_CANARY = 3;
+  PHASE_ACTIVE = 4;
+}
+
+enum SignatureType {
+  SIGNATURE_TYPE_UNKNOWN = 0;
+  SIGNATURE_TYPE_IOC_HASH = 1;
+  SIGNATURE_TYPE_BEHAVIORAL = 2;
+  SIGNATURE_TYPE_NETWORK = 3;
+  SIGNATURE_TYPE_PROCESS = 4;
+}
+
+enum BlastRadius {
+  BLAST_RADIUS_UNKNOWN = 0;
+  BLAST_RADIUS_ISOLATED = 1;
+  BLAST_RADIUS_DATACENTER = 2;
+  BLAST_RADIUS_REGION = 3;
+  BLAST_RADIUS_GLOBAL = 4;
+}
+
+enum ErrorCode {
+  ERROR_CODE_UNKNOWN = 0;
+  ERROR_CODE_SUCCESS = 1;
+  ERROR_CODE_INVALID_SIGNATURE = 2;
+  ERROR_CODE_TRUST_BELOW_THRESHOLD = 3;
+  ERROR_CODE_SKETCH_NOT_FOUND = 4;
+  ERROR_CODE_RATE_LIMITED = 5;
+  ERROR_CODE_INCOMPATIBLE_VERSION = 6;
+  ERROR_CODE_REPLAY_DETECTED = 7;
+}
+
+// Rate limiting information for client backoff
+message RateLimit {
+  fixed32 limit_rpm = 1;
+  fixed32 remaining = 2;
+  fixed64 reset_unix = 3;
+}
+
+// Sign-view messages for deterministic signatures that bind anti-replay fields
+
+// What the sender signs/HMACs for ShareSketch (deterministic marshal)
+message ShareSketchSignView {
+  SketchAttestation attestation = 1;
+  fixed64 timestamp_unix = 2;
+  fixed64 sequence_number = 3; // monotonic per peer; reset only on fresh key rotation
+  bytes nonce = 4; // exactly 16 bytes recommended
+  string cluster_id = 5; // bind identity into the signature
+
+  reserved 100 to 110;
+}
+
+// What the sender signs/HMACs for RequestSketch
+message RequestSketchSignView {
+  string requesting_cluster_id = 1;
+  string target_antibody_id = 2;
+  string environment = 3;
+  fixed64 window_start_unix = 4;
+  fixed64 window_size_seconds = 5;
+  SignatureType signature_type = 6;
+  fixed64 timestamp_unix = 7;
+  fixed64 sequence_number = 8;
+  bytes nonce = 9; // exactly 16 bytes recommended
+
+  reserved 100 to 110;
+}
+
+// What the sender signs/HMACs for HealthReport
+message HealthReportSignView {
+  string cluster_id = 1;
+  ClusterCapabilities capabilities = 2;
+  ClusterMetrics metrics = 3;
+  fixed64 timestamp_unix = 4;
+  fixed64 sequence_number = 5;
+  bytes nonce = 6; // exactly 16 bytes recommended
+
+  reserved 100 to 110;
+}
+
+// Sketch sharing with cryptographic attestation
+message ShareSketchRequest {
+  string cluster_id = 1;
+  SketchAttestation attestation = 2;
+  fixed64 timestamp_unix = 3; // Fixed width for deterministic signing
+  fixed64 sequence_number = 4; // monotonic per peer for replay protection
+  bytes nonce = 5; // exactly 16 bytes for replay protection
+
+  // Authentication - exactly one must be set (signs ShareSketchSignView)
+  oneof auth {
+    bytes hmac_sha256 = 6;
+    bytes signature_ed25519 = 7; // Ed25519 signature over ShareSketchSignView
+  }
+
+  reserved 100 to 110; // Future compatibility
+}
+
+message ShareSketchResponse {
+  bool accepted = 1;
+  ErrorCode error_code = 2;
+  string reason = 3;
+  TrustScore updated_trust = 4;
+  RateLimit rate_limit = 5;
+
+  reserved 100 to 110; // Future compatibility
+}
+
+// Sketch request with Byzantine-tolerant verification
+message RequestSketchRequest {
+  string requesting_cluster_id = 1;
+  string target_antibody_id = 2;
+  string environment = 3;
+  fixed64 window_start_unix = 4;
+  fixed64 window_size_seconds = 5;
+  SignatureType signature_type = 6;
+  fixed64 timestamp_unix = 7;
+  fixed64 sequence_number = 8; // monotonic per peer for replay protection
+  bytes nonce = 9; // exactly 16 bytes for replay protection
+
+  // Authentication (signs RequestSketchSignView)
+  oneof auth {
+    bytes hmac_sha256 = 10;
+    bytes signature_ed25519 = 11;
+  }
+
+  reserved 100 to 110; // Future compatibility
+}
+
+message RequestSketchResponse {
+  ErrorCode error_code = 1;
+  SketchAttestation attestation = 2;
+  string error_message = 3;
+  TrustScore peer_trust = 4;
+  RateLimit rate_limit = 5;
+
+  reserved 100 to 110; // Future compatibility
+}
+
+// Cryptographically attested sketch with lineage
+message SketchAttestation {
+  SketchMetadata metadata = 1;
+  bytes sketch_data = 2; // Binary HLL data
+  AntibodyPhase phase = 3;
+  QuorumCertificate qc = 4;
+  repeated bytes lineage_hashes = 5; // Parent sketch hashes for evolution tracking (32 bytes each)
+
+  reserved 100 to 110; // Future compatibility
+}
+
+message SketchMetadata {
+  string antibody_id = 1;
+  string environment = 2;
+  fixed64 window_start_unix = 3;
+  fixed64 window_size_seconds = 4;
+  SignatureType signature_type = 5;
+  fixed64 cardinality_estimate = 6;
+  double confidence_score = 7; // Wilson confidence interval
+  bytes sketch_hash = 8; // SHA-256 of canonical sketch representation (32 bytes)
+
+  // HLL compatibility validation - check before UnmarshalBinary/Merge
+  uint32 hll_precision = 9; // 4..16
+  fixed64 hll_salt = 10; // must be non-zero across federation
+  string hll_version = 11; // e.g., "v1"
+
+  reserved 100 to 110; // Future compatibility
+}
+
+// Byzantine-tolerant quorum certificate
+message QuorumCertificate {
+  bytes signing_hash = 1; // SHA-256 hash for deterministic signing (32 bytes)
+  repeated ClusterSignature signatures = 2;
+  fixed32 quorum_size = 3;
+  fixed64 assembly_time_unix = 4;
+
+  reserved 100 to 110; // Future compatibility
+}
+
+message ClusterSignature {
+  string cluster_id = 1;
+  bytes public_key_ed25519 = 2; // Ed25519 public key (32 bytes)
+  bytes signature_ed25519 = 3; // Ed25519 signature (64 bytes)
+  fixed64 timestamp_unix = 4;
+
+  reserved 100 to 110; // Future compatibility
+}
+
+// Trust scoring for Byzantine fault tolerance
+message TrustScore {
+  string cluster_id = 1;
+  double reliability_score = 2; // [0,1] based on historical accuracy
+  double response_score = 3; // [0,1] based on response time/availability
+  double consensus_score = 4; // [0,1] based on agreement with majority
+  fixed64 last_updated_unix = 5;
+  fixed32 interaction_count = 6;
+
+  reserved 100 to 110; // Future compatibility
+}
+
+// Health reporting for cluster capability discovery
+message HealthReportRequest {
+  string cluster_id = 1;
+  ClusterCapabilities capabilities = 2;
+  ClusterMetrics metrics = 3;
+  fixed64 timestamp_unix = 4;
+  fixed64 sequence_number = 5; // monotonic per peer for replay protection
+  bytes nonce = 6; // exactly 16 bytes for replay protection
+
+  // Authentication (signs HealthReportSignView)
+  oneof auth {
+    bytes hmac_sha256 = 7;
+    bytes signature_ed25519 = 8;
+  }
+
+  reserved 100 to 110; // Future compatibility
+}
+
+message HealthReportResponse {
+  bool acknowledged = 1;
+  ErrorCode error_code = 2;
+  FederationStatus federation_status = 3;
+  RateLimit rate_limit = 4;
+
+  reserved 100 to 110; // Future compatibility
+}
+
+message ClusterCapabilities {
+  string protocol_version = 1; // "v4"
+  repeated SignatureType supported_signature_types = 2;
+  bool supports_post_quantum = 3;
+  BlastRadius blast_radius = 4;
+  fixed32 max_sketch_size_kb = 5;
+
+  reserved 100 to 110; // Future compatibility
+}
+
+message ClusterMetrics {
+  fixed32 active_antibodies = 1;
+  double avg_detection_latency_ms = 2;
+  double sketch_accuracy_p95 = 3;
+  fixed64 total_attacks_detected = 4;
+  double federation_bandwidth_mbps = 5;
+
+  reserved 100 to 110; // Future compatibility
+}
+
+message FederationStatus {
+  fixed32 total_peers = 1;
+  fixed32 healthy_peers = 2;
+  fixed32 quarantined_peers = 3;
+  double avg_trust_score = 4;
+  fixed64 last_consensus_unix = 5;
+
+  reserved 100 to 110; // Future compatibility
+}
+
+// Streaming federation messages
+message FederationMessage {
+  oneof message_type {
+    ShareSketchRequest share_request = 1;
+    ShareSketchResponse share_response = 2;
+    RequestSketchRequest request_request = 3;
+    RequestSketchResponse request_response = 4;
+    HealthReportRequest health_request = 5;
+    HealthReportResponse health_response = 6;
+    string ping = 7;
+    string pong = 8;
+  }
+
+  reserved 100 to 110; // Future compatibility
+}

@@ -1,0 +1,34 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: aswarm
+
+resources:
+  - namespace.yaml
+  - blue-api-deployment.yaml
+  - blue-api-service.yaml
+  - blue-api-networkpolicy.yaml
+  - blue-api-ingress.yaml
+  # PVC added in production overlay only
+
+configMapGenerator:
+  - name: aswarm-detections
+    files:
+      - detection-rules.json
+    options:
+      labels:
+        app: aswarm-blue-api
+        app.kubernetes.io/name: aswarm
+        app.kubernetes.io/component: blue-api-rules
+
+# Keep hash suffixes enabled for automatic rollouts
+generatorOptions:
+  disableNameSuffixHash: false
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+
+# Common labels applied to all resources
+commonLabels:
+  app.kubernetes.io/name: aswarm
+  app.kubernetes.io/component: blue-api
+  app.kubernetes.io/part-of: aswarm-platform

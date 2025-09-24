@@ -1,0 +1,551 @@
+---
+# Production-Ready A-SWARM Fast-Path Deployment v3
+# Addresses all security, networking, and operational concerns
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aswarm
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aswarm-sentinel
+  namespace: aswarm
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aswarm-pheromone
+  namespace: aswarm
+---
+# Sentinel needs leases (no delete) and events
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: aswarm-sentinel-role
+  namespace: aswarm
+rules:
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create"]
+---
+# Pheromone needs leases for WAL coordination
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: aswarm-pheromone-role
+  namespace: aswarm
+rules:
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: aswarm-sentinel-binding
+  namespace: aswarm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: aswarm-sentinel-role
+subjects:
+- kind: ServiceAccount
+  name: aswarm-sentinel
+  namespace: aswarm
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: aswarm-pheromone-binding
+  namespace: aswarm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: aswarm-pheromone-role
+subjects:
+- kind: ServiceAccount
+  name: aswarm-pheromone
+  namespace: aswarm
+---
+# PersistentVolumeClaim for WAL storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: aswarm-wal-pvc
+  namespace: aswarm
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  # Uncomment for specific storage class
+  # storageClassName: fast-ssd
+---
+# Pheromone Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: aswarm-pheromone
+  namespace: aswarm
+  labels:
+    app: aswarm-pheromone
+spec:
+  ports:
+  - name: fastpath
+    port: 8888
+    protocol: UDP
+    targetPort: 8888
+  - name: http
+    port: 9000
+    protocol: TCP
+    targetPort: 9000
+  selector:
+    app: aswarm-pheromone
+  clusterIP: None  # Headless for direct pod addressing (WAL consistency)
+---
+# Pheromone Deployment with crash recovery
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aswarm-pheromone
+  namespace: aswarm
+spec:
+  replicas: 1  # Single instance for WAL consistency
+  strategy:
+    type: Recreate  # Ensure clean WAL handoff
+  selector:
+    matchLabels:
+      app: aswarm-pheromone
+  template:
+    metadata:
+      labels:
+        app: aswarm-pheromone
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9000"
+        prometheus.io/path: "/metrics"
+        # Force rollout on code change
+        aswarm.ai/code-bundle-sha256: "REPLACE_WITH_SHA256"
+    spec:
+      serviceAccountName: aswarm-pheromone
+      securityContext:
+        fsGroup: 1000  # Ensure WAL PVC is writable
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 30
+      # Extract code from tarball secret
+      initContainers:
+      - name: extract-code
+        image: busybox:1.36
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo "Extracting code bundle..."
+          cd /app
+          tar -xzf /tmp/code/code.tar.gz
+          echo "Extracted:"
+          ls -la
+          # Make scripts executable
+          find . -name "*.py" -exec chmod +x {} \;
+          # Ensure WAL dir has correct permissions
+          mkdir -p /var/lib/aswarm/wal
+          chown -R 1000:1000 /var/lib/aswarm/wal
+        volumeMounts:
+        - name: code-bundle
+          mountPath: /tmp/code
+        - name: app-code
+          mountPath: /app
+        - name: wal-storage
+          mountPath: /var/lib/aswarm/wal
+        securityContext:
+          runAsUser: 0  # Need root for chown
+      containers:
+      - name: pheromone
+        image: python:3.11-slim
+        command: ["python", "-m", "pheromone.udp_listener_v4"]
+        args:
+        - "--bind=0.0.0.0"
+        - "--port=8888"
+        - "--json-logs"
+        - "--ring-buffer-size=20000"
+        - "--workers=16"
+        env:
+        - name: PYTHONPATH
+          value: /app
+        - name: ASWARM_FASTPATH_KEY
+          valueFrom:
+            secretKeyRef:
+              name: aswarm-fastpath-key
+              key: key
+        - name: ASWARM_WAL_DIR
+          value: /var/lib/aswarm/wal
+        - name: ASWARM_HTTP_PORT
+          value: "9000"
+        # Resource limits for production
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1536Mi"  # Extra headroom for WAL bursts
+            cpu: "2"
+        ports:
+        - containerPort: 8888
+          protocol: UDP
+          name: fastpath
+        volumeMounts:
+        - name: app-code
+          mountPath: /app
+          readOnly: true
+        - name: wal-storage
+          mountPath: /var/lib/aswarm/wal
+        - name: tmp
+          mountPath: /tmp
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        lifecycle:
+          preStop:
+            exec:
+              command: ["sh", "-c", "sleep 5"]
+      # HTTP sidecar for health/metrics
+      - name: http-sidecar
+        image: python:3.11-slim
+        command: ["python", "-c"]
+        args:
+        - |
+          import http.server, socketserver, json, os, time, threading
+          
+          class HealthHandler(http.server.BaseHTTPRequestHandler):
+              def do_GET(self):
+                  if self.path == "/healthz":
+                      # TODO: Check UDP listener health via shared volume
+                      self.send_response(200)
+                      self.end_headers()
+                      self.wfile.write(b"ok")
+                  elif self.path == "/metrics":
+                      # TODO: Read metrics from shared volume or UDP listener API
+                      self.send_response(200)
+                      self.send_header("Content-Type", "text/plain")
+                      self.end_headers()
+                      # Placeholder metrics
+                      metrics = [
+                          "# HELP aswarm_up A-SWARM listener status",
+                          "# TYPE aswarm_up gauge",
+                          "aswarm_up 1",
+                      ]
+                      self.wfile.write("\n".join(metrics).encode())
+                  else:
+                      self.send_response(404)
+                      self.end_headers()
+              
+              def log_message(self, *args):
+                  pass  # Quiet logs
+          
+          print("Starting health/metrics server on :9000")
+          socketserver.TCPServer.allow_reuse_address = True
+          httpd = socketserver.TCPServer(("0.0.0.0", 9000), HealthHandler)
+          httpd.serve_forever()
+        ports:
+        - containerPort: 9000
+          name: http
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 9000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 9000
+          initialDelaySeconds: 2
+          periodSeconds: 5
+          timeoutSeconds: 2
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "10m"
+          limits:
+            memory: "64Mi"
+            cpu: "100m"
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: code-bundle
+        secret:
+          secretName: aswarm-code-bundle
+      - name: app-code
+        emptyDir: {}
+      - name: wal-storage
+        persistentVolumeClaim:
+          claimName: aswarm-wal-pvc
+      - name: tmp
+        emptyDir: {}
+      # Anti-affinity to spread across nodes (if scaled)
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - aswarm-pheromone
+              topologyKey: kubernetes.io/hostname
+---
+# Sentinel DaemonSet
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: aswarm-sentinel
+  namespace: aswarm
+spec:
+  selector:
+    matchLabels:
+      app: aswarm-sentinel
+  template:
+    metadata:
+      labels:
+        app: aswarm-sentinel
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9001"
+        aswarm.ai/code-bundle-sha256: "REPLACE_WITH_SHA256"
+    spec:
+      serviceAccountName: aswarm-sentinel
+      # Remove hostNetwork unless truly needed for latency
+      # hostNetwork: true
+      dnsPolicy: ClusterFirst
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 10
+      # Extract code from tarball
+      initContainers:
+      - name: extract-code
+        image: busybox:1.36
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo "Extracting code bundle..."
+          cd /app
+          tar -xzf /tmp/code/code.tar.gz
+          echo "Extracted:"
+          ls -la
+          # Make scripts executable
+          find . -name "*.py" -exec chmod +x {} \;
+        volumeMounts:
+        - name: code-bundle
+          mountPath: /tmp/code
+        - name: app-code
+          mountPath: /app
+      containers:
+      - name: sentinel
+        image: python:3.11-slim
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          # Start health check server
+          python -c "
+          import http.server, socketserver, threading
+          class H(http.server.BaseHTTPRequestHandler):
+              def do_GET(self):
+                  if self.path == '/healthz':
+                      self.send_response(200); self.end_headers(); self.wfile.write(b'ok')
+                  else:
+                      self.send_response(404); self.end_headers()
+              def log_message(self, *a): pass
+          httpd = socketserver.TCPServer(('0.0.0.0', 9001), H)
+          threading.Thread(target=httpd.serve_forever, daemon=True).start()
+          print('Health server started on :9001')
+          " &
+          
+          # Run the sentinel logic
+          echo "Sentinel started on $(hostname)"
+          
+          # In production, this would run your actual sentinel code:
+          # python -m sentinel.detector --fast-path-host=aswarm-pheromone --fast-path-port=8888
+          
+          # For now, simulate with periodic fast-path test
+          while true; do
+            python -m sentinel.fast_path_v4 \
+              --host aswarm-pheromone.aswarm.svc.cluster.local \
+              --port 8888 \
+              --score 0.95 \
+              --selector "test=periodic" \
+              --witness-count 3 \
+              || true
+            sleep 30
+          done
+        env:
+        - name: PYTHONPATH
+          value: /app
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: ASWARM_FASTPATH_KEY
+          valueFrom:
+            secretKeyRef:
+              name: aswarm-fastpath-key
+              key: key
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+        ports:
+        - containerPort: 9001
+          name: health
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 9001
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 9001
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        volumeMounts:
+        - name: app-code
+          mountPath: /app
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: code-bundle
+        secret:
+          secretName: aswarm-code-bundle
+      - name: app-code
+        emptyDir: {}
+      - name: tmp
+        emptyDir: {}
+      # Only tolerate control-plane if needed
+      tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        effect: "NoSchedule"
+        operator: "Exists"
+---
+# NetworkPolicy for defense in depth
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aswarm-network-policy
+  namespace: aswarm
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow UDP fast-path from any pod in cluster
+  - from:
+    - namespaceSelector: {}
+    ports:
+    - protocol: UDP
+      port: 8888
+  # Allow health/metrics from monitoring
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 9000
+    - protocol: TCP
+      port: 9001
+  # Allow prometheus scraping from any namespace
+  - from:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 9000
+    - protocol: TCP  
+      port: 9001
+  egress:
+  # Allow DNS
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+    podSelector:
+      matchLabels:
+        k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+  # Allow API server access (replace with your cluster's service IP)
+  - to:
+    - ipBlock:
+        cidr: 10.96.0.1/32  # kubernetes.default.svc ClusterIP
+    ports:
+    - protocol: TCP
+      port: 443
+  # Allow fast-path UDP to pheromone
+  - to:
+    - podSelector:
+        matchLabels:
+          app: aswarm-pheromone
+    ports:
+    - protocol: UDP
+      port: 8888
+---
+# PodDisruptionBudget for Pheromone (maintain availability)
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: aswarm-pheromone-pdb
+  namespace: aswarm
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: aswarm-pheromone

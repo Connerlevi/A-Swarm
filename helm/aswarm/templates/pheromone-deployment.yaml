@@ -1,0 +1,100 @@
+{{- if and .Values.global.enabled .Values.pheromone.enabled -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aswarm.fullname" . }}-pheromone
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aswarm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pheromone
+spec:
+  replicas: {{ .Values.pheromone.replicas }}
+  selector:
+    matchLabels:
+      {{- include "aswarm.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: pheromone
+  template:
+    metadata:
+      annotations:
+        checksum/killswitch: {{ include (print $.Template.BasePath "/killswitch-configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "aswarm.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: pheromone
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "aswarm.serviceAccountName" . }}
+      securityContext:
+        fsGroup: 65532
+        runAsNonRoot: true
+      containers:
+        - name: pheromone
+          securityContext:
+            {{- toYaml .Values.pheromone.securityContext | nindent 12 }}
+          image: {{ include "aswarm.image" (dict "imageRoot" .Values.pheromone.image "Values" .Values) }}
+          imagePullPolicy: {{ .Values.pheromone.image.pullPolicy }}
+          command:
+            - python
+            - -m
+            - pheromone.gossip_v2
+          args:
+            - --namespace={{ .Values.global.namespace }}
+            - --window-ms={{ .Values.pheromone.detection.windowMs }}
+            - --quorum={{ .Values.pheromone.detection.quorumThreshold }}
+            - --node-score-threshold={{ .Values.pheromone.detection.nodeScoreThreshold }}
+            - --fast-path-score={{ .Values.pheromone.detection.fastPathScore }}
+            {{- if .Values.advanced.debug }}
+            - --debug
+            {{- end }}
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: ASWARM_KILL_SWITCH
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.killSwitch.configMapName }}
+                  key: state
+            - name: ASWARM_DRY_RUN
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.killSwitch.configMapName }}
+                  key: dryrun.enabled
+          {{- if .Values.monitoring.prometheus.enabled }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.monitoring.prometheus.port }}
+              protocol: TCP
+          {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.pheromone.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.pheromone.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end -}}

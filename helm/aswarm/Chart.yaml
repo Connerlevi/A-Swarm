@@ -1,0 +1,24 @@
+apiVersion: v2
+name: aswarm
+description: A-SWARM Autonomic Defense System for AI Infrastructure
+type: application
+version: 0.2.0
+appVersion: "2025.1.0"
+home: https://github.com/Connerlevi/A-Swarm
+keywords:
+  - autonomic
+  - defense
+  - security
+  - kubernetes
+maintainers:
+  - name: A-SWARM Team
+    email: aswarm@example.com
+sources:
+  - https://github.com/Connerlevi/A-Swarm
+annotations:
+  # Security annotations
+  "security.aswarm.ai/signed": "true"
+  "security.aswarm.ai/sbom-included": "true"
+  # Operational annotations  
+  "ops.aswarm.ai/min-kubernetes": "1.24"
+  "ops.aswarm.ai/kill-switch": "supported"

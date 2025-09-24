@@ -1,0 +1,31 @@
+---
+# ServiceMonitor for Blue API - Apply when Prometheus Operator is available
+# Current approach: using prometheus.io/* annotations until Operator is installed
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: aswarm-blue-api
+  namespace: aswarm
+  labels:
+    app: aswarm-blue-api
+    app.kubernetes.io/name: aswarm
+    app.kubernetes.io/component: blue-api
+    # Uncomment when installing kube-prometheus-stack:
+    # release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: aswarm-blue-api  # matches Service labels
+  namespaceSelector:
+    matchNames: [aswarm]
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
+    scrapeTimeout: 10s
+    honorLabels: true
+    # Optional hardening once cardinality is assessed:
+    # metricRelabelings:
+    # - sourceLabels: [__name__]
+    #   regex: 'python_.+|process_.+'
+    #   action: drop

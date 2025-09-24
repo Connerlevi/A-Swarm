@@ -1,0 +1,130 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aswarm-blue-api
+  labels:
+    app: aswarm-blue-api
+    app.kubernetes.io/name: aswarm-blue-api
+    app.kubernetes.io/part-of: aswarm
+    app.kubernetes.io/component: blue-api
+    app.kubernetes.io/version: "v1.0.0"
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  progressDeadlineSeconds: 300
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: aswarm-blue-api
+  template:
+    metadata:
+      labels:
+        app: aswarm-blue-api
+        app.kubernetes.io/name: aswarm-blue-api
+        app.kubernetes.io/part-of: aswarm
+        app.kubernetes.io/component: blue-api
+        app.kubernetes.io/version: "v1.0.0"
+      # Prometheus scrape annotations added in overlays when needed:
+      # annotations:
+      #   prometheus.io/scrape: "true"
+      #   prometheus.io/port: "8080"
+      #   prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: default  # Overridden in overlays
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        fsGroupChangePolicy: Always
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 20
+      containers:
+      - name: blue-api
+        # Overridden by overlays with pinned digest
+        image: aswarm-blue-api:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        env:
+        - name: PYTHONDONTWRITEBYTECODE
+          value: "1"
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: ASWARM_COMPONENT_NAME
+          value: blueswarm-api
+        - name: ASWARM_CONTENT_DIR
+          value: /data/content
+        - name: ASWARM_STORAGE_DIR
+          value: /data/storage
+        - name: ASWARM_API_PORT
+          value: "8080"
+        - name: ASWARM_CORS_ORIGIN
+          value: "*"  # Restricted in production overlay
+        - name: ASWARM_AUTH_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: aswarm-blue-api-auth
+              key: token
+              optional: true  # Required in production overlay
+        volumeMounts:
+        - name: content
+          mountPath: /data/content
+          readOnly: true
+        - name: storage
+          mountPath: /data/storage
+        - name: tmp
+          mountPath: /tmp
+        startupProbe:
+          httpGet:
+            path: /ready
+            port: http
+          periodSeconds: 5
+          failureThreshold: 20  # Up to ~100s warmup
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          timeoutSeconds: 3
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 2
+          failureThreshold: 6
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+      volumes:
+      - name: content
+        configMap:
+          # Kustomize rewrites to hashed name
+          name: aswarm-detections
+      - name: storage
+        emptyDir: {}  # Patched to PVC in prod overlay
+      - name: tmp
+        emptyDir: {}

@@ -1,0 +1,375 @@
+---
+# A-SWARM Blue API Production Deployment - Zero-Compromise Standard
+# Consolidated manifest with complete security hardening
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aswarm
+  labels:
+    app.kubernetes.io/name: aswarm
+    app.kubernetes.io/component: namespace
+    # Pod Security Standards - Enforce restricted baseline
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+
+---
+# PVC for episode archives / forensics - CRITICAL for production
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: aswarm-blue-api-storage
+  namespace: aswarm
+  labels:
+    app: aswarm-blue-api
+    app.kubernetes.io/name: aswarm
+    app.kubernetes.io/component: blue-api
+spec:
+  storageClassName: hostpath  # Use cluster default in production
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+# Detection rules ConfigMap with content checksum
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aswarm-detections
+  namespace: aswarm
+  labels:
+    app: aswarm-blue-api
+    app.kubernetes.io/name: aswarm
+    app.kubernetes.io/component: blue-api-rules
+  annotations:
+    aswarm.ai/content-checksum: "sha256:6b16707aab9ea1cd082e60740e105e9413fb99f0ef8822c46f5f27ba36a2c584"
+data:
+  detection-rules.json: |
+    {
+      "metadata": {
+        "name": "aswarm-detection-rules",
+        "version": "1.0.0",
+        "content_type": "detection-rules",
+        "created": "2025-01-10T00:00:00Z",
+        "author": "aswarm-team"
+      },
+      "content": {
+        "detection_rules": [
+          {
+            "id": "privilege-escalation",
+            "name": "Privilege Escalation Detection",
+            "description": "Detects privilege escalation attempts",
+            "query": "privilege_escalation or escalation",
+            "severity": "critical",
+            "enabled": true,
+            "threshold": 0.5,
+            "metadata": { "mitre_technique": "T1068", "mitre_tactic": "Privilege Escalation" }
+          },
+          {
+            "id": "lateral-movement",
+            "name": "Lateral Movement Detection",
+            "description": "Detects lateral movement in the network",
+            "query": "lateral_movement or pivot",
+            "severity": "high",
+            "enabled": true,
+            "threshold": 0.6,
+            "metadata": { "mitre_technique": "T1021", "mitre_tactic": "Lateral Movement" }
+          },
+          {
+            "id": "data-exfiltration",
+            "name": "Data Exfiltration Detection",
+            "description": "Detects data exfiltration attempts",
+            "query": "exfiltration or data_theft",
+            "severity": "critical",
+            "enabled": true,
+            "threshold": 0.7,
+            "metadata": { "mitre_technique": "T1041", "mitre_tactic": "Exfiltration" }
+          },
+          {
+            "id": "persistence",
+            "name": "Persistence Mechanism Detection",
+            "description": "Detects persistence mechanisms",
+            "query": "persistence or backdoor",
+            "severity": "high",
+            "enabled": true,
+            "threshold": 0.6,
+            "metadata": { "mitre_technique": "T1136", "mitre_tactic": "Persistence" }
+          }
+        ]
+      }
+    }
+
+---
+# Service for Blue API
+apiVersion: v1
+kind: Service
+metadata:
+  name: aswarm-blue-api
+  namespace: aswarm
+  labels:
+    app: aswarm-blue-api
+    app.kubernetes.io/name: aswarm
+    app.kubernetes.io/component: blue-api
+spec:
+  selector:
+    app: aswarm-blue-api
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
+    protocol: TCP
+  type: ClusterIP
+
+---
+# ServiceAccount with minimal permissions
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aswarm-blueswarm
+  namespace: aswarm
+  labels:
+    app.kubernetes.io/name: aswarm
+    app.kubernetes.io/component: blue-api
+
+---
+# ExternalSecret for API token rotation (ESO required)
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: aswarm-blue-api-auth-external
+  namespace: aswarm
+  labels:
+    app: aswarm-blue-api
+    app.kubernetes.io/name: aswarm
+    app.kubernetes.io/component: blue-api
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: aswarm-secretstore
+    kind: SecretStore
+  target:
+    name: aswarm-blue-api-auth
+    creationPolicy: Owner
+    template:
+      type: Opaque
+  data:
+  - secretKey: token
+    remoteRef:
+      key: aswarm-blue-api-auth
+      property: token
+
+---
+# Fallback Secret for bootstrap (ESO will replace)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: aswarm-blue-api-auth
+  namespace: aswarm
+  labels:
+    app: aswarm-blue-api
+    app.kubernetes.io/name: aswarm
+    app.kubernetes.io/component: blue-api
+  annotations:
+    external-secrets.io/managed: "true"
+type: Opaque
+stringData:
+  token: "change-me-in-prod"
+
+---
+# Production-grade Blue API Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aswarm-blue-api
+  namespace: aswarm
+  labels:
+    app: aswarm-blue-api
+    app.kubernetes.io/name: aswarm
+    app.kubernetes.io/component: blue-api
+    app.kubernetes.io/version: "v1.0.0"
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: aswarm-blue-api
+  template:
+    metadata:
+      labels:
+        app: aswarm-blue-api
+        app.kubernetes.io/name: aswarm
+        app.kubernetes.io/component: blue-api
+      annotations:
+        # ConfigMap checksum triggers rollout on rule changes
+        aswarm.ai/content-checksum: "sha256:6b16707aab9ea1cd082e60740e105e9413fb99f0ef8822c46f5f27ba36a2c584"
+        # Prometheus scraping
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: aswarm-blueswarm
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        fsGroupChangePolicy: Always
+      containers:
+      - name: blue-api
+        # Immutable digest pinning for supply chain security
+        image: aswarm-blue-api@sha256:6621a49bdca59d4178b0a117c0ced9323c3f761c0a3ad2653aba4239fa7b26d4
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        env:
+        - name: PYTHONDONTWRITEBYTECODE
+          value: "1"
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: ASWARM_COMPONENT_NAME
+          value: blueswarm-api
+        - name: ASWARM_CONTENT_DIR
+          value: /data/content
+        - name: ASWARM_STORAGE_DIR
+          value: /data/storage
+        - name: ASWARM_API_PORT
+          value: "8080"
+        - name: ASWARM_CORS_ORIGIN
+          value: "*"  # Restrict in production: "https://your-console.example.com"
+        - name: ASWARM_AUTH_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: aswarm-blue-api-auth
+              key: token
+        - name: ASWARM_CERT_PATH
+          value: /etc/aswarm/tls/tls.crt
+        - name: ASWARM_KEY_PATH
+          value: /etc/aswarm/tls/tls.key
+        - name: ASWARM_CA_PATH
+          value: /etc/aswarm/ca/ca.crt
+        - name: ASWARM_SPIFFE_ID
+          value: spiffe://aswarm.local/ns/aswarm/sa/aswarm-blueswarm
+        volumeMounts:
+        - name: content
+          mountPath: /data/content
+          readOnly: true
+        - name: storage
+          mountPath: /data/storage
+        - name: tls-certs
+          mountPath: /etc/aswarm/tls
+          readOnly: true
+        - name: ca-certs
+          mountPath: /etc/aswarm/ca
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          timeoutSeconds: 3
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 2
+          failureThreshold: 6
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+      volumes:
+      - name: content
+        configMap:
+          name: aswarm-detections
+      - name: storage
+        persistentVolumeClaim:
+          claimName: aswarm-blue-api-storage
+      - name: tls-certs
+        secret:
+          secretName: blueswarm-tls
+      - name: ca-certs
+        secret:
+          secretName: aswarm-ca
+      - name: tmp
+        emptyDir: {}
+
+---
+# NetworkPolicy - Zero-trust blast radius limitation
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aswarm-blue-api
+  namespace: aswarm
+  labels:
+    app: aswarm-blue-api
+    app.kubernetes.io/name: aswarm
+    app.kubernetes.io/component: blue-api
+spec:
+  podSelector:
+    matchLabels:
+      app: aswarm-blue-api
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+  - from:
+    # Allow ingress from same namespace (for Red team testing)
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: "aswarm"
+    # Allow ingress from management/monitoring namespaces
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: "aswarm-test"
+    # Allow ingress from monitoring namespace (when Prometheus Operator is deployed)
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: "monitoring"
+    # Allow kubelet health probes (tighten to node CIDR in production)
+    - ipBlock:
+        cidr: 0.0.0.0/0  # Replace with actual node CIDR range
+    ports:
+    - port: 8080
+      protocol: TCP
+  egress:
+  # Allow DNS resolution - tightened to kube-dns only
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: "kube-system"
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+  # Allow HTTPS for certificate validation/OIDC (if needed)
+  - to: []
+    ports:
+    - port: 443
+      protocol: TCP

@@ -1,0 +1,16 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: aswarm-blue-api-pdb
+  labels:
+    app: aswarm-blue-api
+    app.kubernetes.io/name: aswarm-blue-api
+    app.kubernetes.io/part-of: aswarm
+    app.kubernetes.io/component: blue-api
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: aswarm-blue-api

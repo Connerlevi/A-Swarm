@@ -1,0 +1,518 @@
+---
+# SPIRE Server and Agent Deployment for A-SWARM Identity Management (FIXED)
+# Provides SPIFFE-compliant workload attestation for Protocol V4
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: spire-system
+  labels:
+    app.kubernetes.io/name: spire
+    app.kubernetes.io/part-of: aswarm
+    pod-security.kubernetes.io/enforce: privileged  # Required for hostNetwork/hostPath
+---
+# SPIRE Server ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spire-server
+  namespace: spire-system
+---
+# SPIRE Agent ServiceAccount  
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spire-agent
+  namespace: spire-system
+---
+# SPIRE Server ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spire-server-cluster-role
+rules:
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods", "pods/status"] 
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["tokenreviews"]
+  verbs: ["create"]
+---
+# SPIRE Agent ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spire-agent-cluster-role
+rules:
+- apiGroups: [""]
+  resources: ["nodes", "pods"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["nodes/proxy"]
+  verbs: ["get"]
+---
+# SPIRE Server Bundle Writer Role
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spire-server-bundle-writer
+  namespace: spire-system
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+# SPIRE Server ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: spire-server-cluster-role-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: spire-server-cluster-role
+subjects:
+- kind: ServiceAccount
+  name: spire-server
+  namespace: spire-system
+---
+# SPIRE Agent ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: spire-agent-cluster-role-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: spire-agent-cluster-role
+subjects:
+- kind: ServiceAccount
+  name: spire-agent
+  namespace: spire-system
+---
+# SPIRE Server Bundle Writer RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: spire-server-bundle-writer-binding
+  namespace: spire-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: spire-server-bundle-writer
+subjects:
+- kind: ServiceAccount
+  name: spire-server
+  namespace: spire-system
+---
+# SPIRE Server Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spire-server-config
+  namespace: spire-system
+data:
+  server.conf: |
+    server {
+      bind_address = "0.0.0.0"
+      bind_port = "8081"
+      trust_domain = "aswarm.local"
+      data_dir = "/opt/spire/data"
+      log_level = "INFO"
+      ca_ttl = "72h"
+      default_x509_svid_ttl = "4h"
+      default_jwt_svid_ttl = "1h"
+    }
+
+    plugins {
+      DataStore "sql" {
+        plugin_data {
+          database_type = "sqlite3"
+          connection_string = "/opt/spire/data/datastore.sqlite3"
+        }
+      }
+
+      NodeAttestor "k8s_psat" {
+        plugin_data {
+          clusters = {
+            "aswarm-cluster" = {
+              use_token_review_api_validation = true
+              audience = ["spire-server"]
+              service_account_allow_list = [
+                "spire-system:spire-agent"
+              ]
+            }
+          }
+        }
+      }
+
+      KeyManager "disk" {
+        plugin_data {
+          keys_path = "/opt/spire/data/keys.json"
+        }
+      }
+
+      Notifier "k8sbundle" {
+        plugin_data {
+          namespace = "spire-system"
+          config_map = "trust-bundle"
+        }
+      }
+    }
+
+    health_checks {
+      listener_enabled = true
+      bind_address = "0.0.0.0" 
+      bind_port = "8080"
+      live_path = "/live"
+      ready_path = "/ready"
+    }
+---
+# SPIRE Agent Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spire-agent-config
+  namespace: spire-system
+data:
+  agent.conf: |
+    agent {
+      data_dir = "/opt/spire/data"
+      log_level = "INFO"
+      server_address = "spire-server.spire-system.svc.cluster.local"
+      server_port = "8081"
+      trust_domain = "aswarm.local"
+    }
+
+    workload_api {
+      socket_path = "/var/run/spire/agent/agent.sock"
+    }
+
+    plugins {
+      NodeAttestor "k8s_psat" {
+        plugin_data {
+          cluster = "aswarm-cluster"
+          audience = "spire-server"
+        }
+      }
+
+      KeyManager "disk" {
+        plugin_data {
+          directory = "/opt/spire/data"
+        }
+      }
+
+      WorkloadAttestor "k8s" {
+        plugin_data {
+          kubelet_ca_path = "/var/lib/minikube/ca.crt"
+          node_name_env = "NODE_NAME"
+        }
+      }
+    }
+
+    health_checks {
+      listener_enabled = true
+      bind_address = "0.0.0.0"
+      bind_port = "8080"
+    }
+---
+# SPIRE Server Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: spire-server
+  namespace: spire-system
+  labels:
+    app: spire-server
+spec:
+  selector:
+    app: spire-server
+  ports:
+  - name: grpc
+    port: 8081
+    targetPort: 8081
+    protocol: TCP
+  - name: health
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+---
+# SPIRE Server StatefulSet (persistent storage)
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: spire-server
+  namespace: spire-system
+  labels:
+    app: spire-server
+spec:
+  serviceName: spire-server
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spire-server
+  template:
+    metadata:
+      labels:
+        app: spire-server
+    spec:
+      serviceAccountName: spire-server
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+      containers:
+      - name: spire-server
+        image: ghcr.io/spiffe/spire-server:1.9.0
+        args: 
+        - -config
+        - /opt/spire/conf/server/server.conf
+        ports:
+        - containerPort: 8081
+          name: grpc
+        - containerPort: 8080  
+          name: health
+        volumeMounts:
+        - name: spire-server-config
+          mountPath: /opt/spire/conf/server
+          readOnly: true
+        - name: spire-data
+          mountPath: /opt/spire/data
+        - name: server-socket
+          mountPath: /tmp/spire-server/private
+        livenessProbe:
+          httpGet:
+            path: /live
+            port: health
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: health
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      volumes:
+      - name: spire-server-config
+        configMap:
+          name: spire-server-config
+      - name: server-socket
+        emptyDir: {}
+  volumeClaimTemplates:
+  - metadata:
+      name: spire-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 5Gi
+---
+# SPIRE Agent DaemonSet
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: spire-agent
+  namespace: spire-system
+  labels:
+    app: spire-agent
+spec:
+  selector:
+    matchLabels:
+      app: spire-agent
+  template:
+    metadata:
+      labels:
+        app: spire-agent
+    spec:
+      serviceAccountName: spire-agent
+      hostPID: true
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+      - name: spire-agent
+        image: ghcr.io/spiffe/spire-agent:1.9.0
+        args:
+        - -config
+        - /opt/spire/conf/agent/agent.conf
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        securityContext:
+          runAsUser: 0
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+        - name: spire-agent-config
+          mountPath: /opt/spire/conf/agent
+          readOnly: true
+        - name: spire-agent-data
+          mountPath: /opt/spire/data
+        - name: spire-agent-socket
+          mountPath: /var/run/spire/agent
+        - name: proc
+          mountPath: /host/proc
+          readOnly: true
+        - name: sys
+          mountPath: /host/sys  
+          readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /live
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m  
+            memory: 256Mi
+      volumes:
+      - name: spire-agent-config
+        configMap:
+          name: spire-agent-config
+      - name: spire-agent-data
+        hostPath:
+          path: /var/lib/spire-agent
+          type: DirectoryOrCreate
+      - name: spire-agent-socket
+        hostPath:
+          path: /var/run/spire/agent
+          type: DirectoryOrCreate
+      - name: proc
+        hostPath:
+          path: /proc
+          type: Directory
+      - name: sys
+        hostPath:
+          path: /sys
+          type: Directory
+      tolerations:
+      - operator: Exists
+        effect: NoSchedule
+---
+# Network Policy - Only agents can talk to server
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: spire-server-ingress
+  namespace: spire-system
+spec:
+  podSelector:
+    matchLabels:
+      app: spire-server
+  policyTypes: ["Ingress"]
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: "spire-system"
+      podSelector:
+        matchLabels:
+          app: spire-agent
+    ports:
+    - protocol: TCP
+      port: 8081
+    - protocol: TCP
+      port: 8080
+---
+# SPIFFE CSI Driver for workload API delivery
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: csi.spiffe.io
+spec:
+  attachRequired: false
+  podInfoOnMount: true
+  volumeLifecycleModes:
+  - Ephemeral
+---
+# SPIFFE CSI Driver DaemonSet
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: spiffe-csi-driver
+  namespace: spire-system
+spec:
+  selector:
+    matchLabels:
+      app: spiffe-csi-driver
+  template:
+    metadata:
+      labels:
+        app: spiffe-csi-driver
+    spec:
+      serviceAccountName: spire-agent
+      nodeSelector:
+        kubernetes.io/os: linux
+      containers:
+      - name: spiffe-csi-driver
+        image: ghcr.io/spiffe/spiffe-csi-driver:0.3.0
+        args:
+        - -workload-api-socket-dir
+        - /var/run/spire/agent
+        - -csi-socket-path
+        - /var/lib/kubelet/plugins/csi.spiffe.io/csi.sock
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        volumeMounts:
+        - name: spire-agent-socket
+          mountPath: /var/run/spire/agent
+          readOnly: true
+        - name: kubelet-plugin-dir
+          mountPath: /var/lib/kubelet/plugins/csi.spiffe.io
+        - name: kubelet-plugin-registration-dir
+          mountPath: /registration
+        securityContext:
+          privileged: true
+      - name: driver-registrar
+        image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.9.0
+        args:
+        - -csi-address=/csi/csi.sock
+        - -kubelet-registration-path=/var/lib/kubelet/plugins/csi.spiffe.io/csi.sock
+        volumeMounts:
+        - name: kubelet-plugin-dir
+          mountPath: /csi
+        - name: kubelet-plugin-registration-dir
+          mountPath: /registration
+      volumes:
+      - name: spire-agent-socket
+        hostPath:
+          path: /var/run/spire/agent
+          type: DirectoryOrCreate
+      - name: kubelet-plugin-dir
+        hostPath:
+          path: /var/lib/kubelet/plugins/csi.spiffe.io
+          type: DirectoryOrCreate
+      - name: kubelet-plugin-registration-dir
+        hostPath:
+          path: /var/lib/kubelet/plugins_registry
+          type: Directory
+      tolerations:
+      - operator: Exists
+        effect: NoSchedule

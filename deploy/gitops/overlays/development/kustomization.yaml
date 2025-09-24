@@ -1,0 +1,43 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: aswarm
+
+bases:
+  - ../../base
+
+# Development image tag (latest or branch-specific)
+images:
+  - name: aswarm-blue-api
+    newTag: latest
+
+# Single replica for development
+replicas:
+  - name: aswarm-blue-api
+    count: 1
+
+# Development-specific patches
+patchesStrategicMerge:
+  - ingress-patch.yaml
+  - monitoring-patch.yaml
+
+# Add monitoring annotations for Prometheus scraping
+patches:
+  - target:
+      kind: Deployment
+      name: aswarm-blue-api
+    patch: |-
+      - op: add
+        path: /spec/template/metadata/annotations/prometheus.io~1scrape
+        value: "true"
+      - op: add
+        path: /spec/template/metadata/annotations/prometheus.io~1port
+        value: "8080"
+      - op: add
+        path: /spec/template/metadata/annotations/prometheus.io~1path
+        value: "/metrics"
+
+# Development-specific common labels
+commonLabels:
+  environment: development
+  tier: dev

@@ -1,0 +1,348 @@
+---
+# Complete A-SWARM Fast-Path Deployment
+# This single file contains everything needed for a clean deployment
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aswarm
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aswarm-sentinel
+  namespace: aswarm
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aswarm-pheromone
+  namespace: aswarm
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: aswarm-sentinel-role
+  namespace: aswarm
+rules:
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: aswarm-pheromone-role
+  namespace: aswarm
+rules:
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: aswarm-sentinel-binding
+  namespace: aswarm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: aswarm-sentinel-role
+subjects:
+- kind: ServiceAccount
+  name: aswarm-sentinel
+  namespace: aswarm
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: aswarm-pheromone-binding
+  namespace: aswarm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: aswarm-pheromone-role
+subjects:
+- kind: ServiceAccount
+  name: aswarm-pheromone
+  namespace: aswarm
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: aswarm-fastpath-key
+  namespace: aswarm
+type: Opaque
+stringData:
+  key: "aswarm-demo-fastpath-key-please-change-in-production"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aswarm-pheromone
+  namespace: aswarm
+  labels:
+    app: aswarm-pheromone
+spec:
+  selector:
+    app: aswarm-pheromone
+  ports:
+    - name: udp-fastpath
+      protocol: UDP
+      port: 8888
+      targetPort: 8888
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aswarm-pheromone-code
+  namespace: aswarm
+data:
+  udp_listener.py: |
+    # Simplified UDP listener for demo
+    import socket
+    import json
+    import time
+    import logging
+    
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger('pheromone.fastpath')
+    
+    def main():
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind(('0.0.0.0', 8888))
+        logger.info("Fast-path listener started on port 8888")
+        
+        while True:
+            try:
+                data, addr = sock.recvfrom(1024)
+                logger.info(f"Received {len(data)} bytes from {addr[0]}")
+                # In production, would validate HMAC and process elevation
+            except Exception as e:
+                logger.error(f"Error: {e}")
+    
+    if __name__ == '__main__':
+        main()
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aswarm-sentinel-code
+  namespace: aswarm
+data:
+  telemetry.py: |
+    # Simplified telemetry for demo
+    import os
+    import time
+    import json
+    import socket
+    import logging
+    from kubernetes import client, config
+    
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger('sentinel.telemetry')
+    
+    class Telemetry:
+        def __init__(self):
+            try:
+                config.load_incluster_config()
+            except:
+                config.load_kube_config()
+            
+            self.coordination_v1 = client.CoordinationV1Api()
+            self.node_name = os.environ.get('NODE_NAME', 'demo-node')
+            self.namespace = os.environ.get('NAMESPACE', 'aswarm')
+            self.fastpath_host = os.environ.get('FASTPATH_HOST', 'aswarm-pheromone')
+            self.fastpath_port = int(os.environ.get('FASTPATH_PORT', '8888'))
+            
+            # Create UDP socket for fast-path
+            self.udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            
+            logger.info(f"Sentinel initialized: node={self.node_name}, fastpath={self.fastpath_host}:{self.fastpath_port}")
+        
+        def run(self):
+            sequence = 0
+            while True:
+                try:
+                    # Generate score
+                    score = 0.5 + (sequence % 50) / 100.0
+                    
+                    # Create lease signal
+                    lease_name = f"aswarm-sentinel-{self.node_name}"
+                    lease_data = {
+                        "apiVersion": "coordination.k8s.io/v1",
+                        "kind": "Lease",
+                        "metadata": {
+                            "name": lease_name,
+                            "namespace": self.namespace,
+                            "annotations": {
+                                "aswarm.ai/seq": str(sequence),
+                                "aswarm.ai/score": f"{score:.3f}",
+                                "aswarm.ai/ts": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+                            }
+                        }
+                    }
+                    
+                    # Try to create/update lease
+                    try:
+                        self.coordination_v1.create_namespaced_lease(self.namespace, lease_data)
+                    except:
+                        # Update if exists
+                        self.coordination_v1.patch_namespaced_lease(
+                            lease_name, self.namespace, lease_data
+                        )
+                    
+                    # Send via fast-path if high score
+                    if score >= 0.90:
+                        packet = json.dumps({
+                            'node': self.node_name,
+                            'score': score,
+                            'seq': sequence
+                        }).encode()
+                        self.udp_sock.sendto(packet, (self.fastpath_host, self.fastpath_port))
+                        logger.info(f"Fast-path sent: score={score:.3f}")
+                    
+                    logger.info(f"Signal {sequence}: score={score:.3f}")
+                    sequence += 1
+                    time.sleep(0.05)  # 50ms cadence
+                    
+                except Exception as e:
+                    logger.error(f"Error: {e}")
+                    time.sleep(1)
+    
+    if __name__ == '__main__':
+        telemetry = Telemetry()
+        telemetry.run()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aswarm-pheromone
+  namespace: aswarm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aswarm-pheromone
+  template:
+    metadata:
+      labels:
+        app: aswarm-pheromone
+    spec:
+      serviceAccountName: aswarm-pheromone
+      containers:
+      - name: pheromone
+        image: python:3.11-alpine
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            pip install kubernetes --quiet
+            cp /code/udp_listener.py /tmp/
+            cd /tmp
+            python udp_listener.py
+        env:
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: ASWARM_FASTPATH_KEY
+          valueFrom:
+            secretKeyRef:
+              name: aswarm-fastpath-key
+              key: key
+        ports:
+        - name: udp-fastpath
+          containerPort: 8888
+          protocol: UDP
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        volumeMounts:
+        - name: code
+          mountPath: /code
+      volumes:
+      - name: code
+        configMap:
+          name: aswarm-pheromone-code
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: aswarm-sentinel
+  namespace: aswarm
+spec:
+  selector:
+    matchLabels:
+      app: aswarm-sentinel
+  template:
+    metadata:
+      labels:
+        app: aswarm-sentinel
+    spec:
+      serviceAccountName: aswarm-sentinel
+      containers:
+      - name: sentinel
+        image: python:3.11-alpine
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            pip install kubernetes --quiet
+            cp /code/telemetry.py /tmp/
+            cd /tmp
+            python telemetry.py
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: FASTPATH_HOST
+          value: "aswarm-pheromone"
+        - name: FASTPATH_PORT
+          value: "8888"
+        - name: ASWARM_FASTPATH_KEY
+          valueFrom:
+            secretKeyRef:
+              name: aswarm-fastpath-key
+              key: key
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        volumeMounts:
+        - name: code
+          mountPath: /code
+      volumes:
+      - name: code
+        configMap:
+          name: aswarm-sentinel-code
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule

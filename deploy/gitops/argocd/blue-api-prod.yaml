@@ -1,0 +1,84 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: aswarm-blue-api-prod
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: aswarm-blue-api
+    app.kubernetes.io/component: blue-api
+    app.kubernetes.io/part-of: aswarm
+    environment: production
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  annotations:
+    # Production deployment requires approval
+    notifications.argoproj.io/subscribe.on-sync-failed.slack: aswarm-alerts
+    notifications.argoproj.io/subscribe.on-health-degraded.slack: aswarm-alerts
+    notifications.argoproj.io/subscribe.on-deployed.slack: aswarm-alerts  # Close the loop on successful deploys
+spec:
+  project: aswarm  # Use dedicated project, not default
+  source:
+    repoURL: https://github.com/your-org/A-SWARM.git  # TODO: Update with actual repo
+    path: deploy/gitops/overlays/production
+    targetRevision: main  # Use main branch for production
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: aswarm-prod  # Environment-specific namespace
+  syncPolicy:
+    # Production requires manual approval for safety
+    automated:
+      prune: false       # Manual pruning for production safety
+      selfHeal: false    # Manual healing to prevent unexpected changes
+    syncOptions:
+      - CreateNamespace=true
+      - PruneLast=true
+      - ApplyOutOfSyncOnly=true
+      - Validate=true    # Extra validation for production
+      - ServerSideApply=true  # Use server-side apply for better conflict resolution
+      - RespectIgnoreDifferences=true  # Honor ignoreDifferences during sync
+      - PrunePropagationPolicy=foreground  # Ordered deletion for production
+      - FailOnSharedResource=true  # Prevent accidental deletion of shared resources
+    retry:
+      limit: 3  # Fewer retries for production
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 5m
+  revisionHistoryLimit: 20  # More history for production
+  ignoreDifferences:
+    # Ignore differences in replicas (allow HPA scaling)
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+    # Ignore status fields
+    - group: "*"
+      kind: "*"
+      jsonPointers:
+        - /status
+    # Ignore managed fields from other controllers
+    - group: ""
+      kind: ConfigMap
+      managedFieldsManagers:
+        - kustomize-controller
+    # Ignore cert-manager managed annotations
+    - group: ""
+      kind: Secret
+      managedFieldsManagers:
+        - cert-manager
+    # Ignore ESO managed secrets
+    - group: ""
+      kind: Secret
+      managedFieldsManagers:
+        - external-secrets
+  info:
+    - name: "Runbook"
+      value: "https://wiki.internal/aswarm/runbooks/blue-api"
+    - name: "Grafana"
+      value: "https://grafana.internal/d/aswarm-prod"
+    - name: "Prometheus"
+      value: "https://prometheus.internal/graph?g0.expr=up{job='aswarm-blue-api'}"
+    - name: "Logs"
+      value: "https://kibana.internal/app/discover#/?_q=(kubernetes.namespace:aswarm-prod)"
+    - name: "PagerDuty"
+      value: "https://pagerduty.internal/services/aswarm-prod"

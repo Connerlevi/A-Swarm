@@ -1,0 +1,300 @@
+# Default values for A-SWARM
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Global settings
+global:
+  # Kubernetes namespace for A-SWARM components
+  namespace: aswarm
+  
+  # Global kill switch - set to false to disable all enforcement
+  enabled: true
+  
+  # Maximum ring level for enforcement (1-5)
+  maxRing: 3
+  
+  # Dry run mode - log actions without executing
+  dryRun: true
+  
+  # Image settings
+  imageRegistry: docker.io
+  imagePullPolicy: IfNotPresent
+  imagePullSecrets: []
+
+# Sentinel DaemonSet configuration
+sentinel:
+  enabled: true
+  image:
+    repository: aswarm/sentinel
+    tag: "2025.1.0"
+    pullPolicy: IfNotPresent
+  
+  # Telemetry settings
+  telemetry:
+    cadenceMs: 50
+    windowMs: 100
+    
+  # Fast-path configuration
+  fastPath:
+    enabled: true
+    targetHost: ""  # Auto-detected if empty
+    targetPort: 8888
+    
+  # Resource limits
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  
+  # Security context
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+      add:
+        - NET_ADMIN  # For eBPF
+  
+  # Node selector
+  nodeSelector: {}
+  
+  # Tolerations for node taints
+  tolerations:
+    - key: node-role.kubernetes.io/master
+      effect: NoSchedule
+
+# Pheromone deployment configuration  
+pheromone:
+  enabled: true
+  replicas: 3
+  image:
+    repository: aswarm/pheromone
+    tag: "2025.1.0"
+    pullPolicy: IfNotPresent
+  
+  # Detection settings
+  detection:
+    windowMs: 80
+    quorumThreshold: 2
+    nodeScoreThreshold: 0.7
+    fastPathScore: 0.90
+    
+  # Fast-path UDP listener
+  fastPath:
+    enabled: true
+    port: 8888
+    workers: 2
+    queueSize: 10000
+  
+  # Resources
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+      
+  # Security context
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+  
+  # Anti-affinity for HA
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/component
+                  operator: In
+                  values:
+                    - pheromone
+            topologyKey: kubernetes.io/hostname
+
+# Micro-act executor configuration
+microact:
+  enabled: true
+  replicas: 2
+  image:
+    repository: aswarm/microact
+    tag: "2025.1.0"
+    pullPolicy: IfNotPresent
+  
+  # Enforcement settings
+  enforcement:
+    maxRing: 3
+    dryRun: true
+    defaultTTL: 300
+  
+  # Resources  
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+      
+  # Security context
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+
+# Policy configuration
+policies:
+  # Built-in policies
+  defaults:
+    - name: network-isolation
+      ring: 2
+      action: networkpolicy_isolate
+      scoreThreshold: 0.7
+      ttlSeconds: 300
+      
+    - name: egress-throttle  
+      ring: 2
+      action: egress_rate_limit
+      scoreThreshold: 0.75
+      ttlSeconds: 300
+      params:
+        rateMbps: 10
+        
+    - name: token-suspend
+      ring: 3
+      action: token_revoke
+      scoreThreshold: 0.85
+      ttlSeconds: 3600
+      params:
+        provider: okta
+        scope: refresh_tokens
+  
+  # Custom policies (add your own)
+  custom: []
+
+# Fast-path UDP configuration (optional)
+fastpath:
+  enabled: true
+  port: 8888
+  
+  # Shared secret for HMAC
+  secretName: aswarm-fastpath-key
+  secretKey: key
+  
+  # Auto-generate key if secret doesn't exist
+  generateKey: true
+  
+  # Key rotation support
+  keyRotation:
+    enabled: false
+    keyIds: [1]
+  
+# RBAC configuration
+rbac:
+  # Create RBAC resources
+  create: true
+  
+  # Use existing ServiceAccount
+  serviceAccountName: ""
+  
+  # Additional rules
+  additionalRules: []
+
+# Monitoring configuration
+monitoring:
+  # Prometheus metrics
+  prometheus:
+    enabled: true
+    port: 9090
+    path: /metrics
+    
+  # Service monitor for Prometheus Operator
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}
+  
+  # Grafana dashboards
+  dashboards:
+    enabled: false
+    labels:
+      grafana_dashboard: "1"
+
+# Evidence collection
+evidence:
+  # Evidence pack generation
+  enabled: true
+  schedule: "0 */6 * * *"  # Every 6 hours
+  
+  # Storage settings
+  storage:
+    size: 10Gi
+    className: ""  # Use cluster default
+    
+# Kill switch configuration
+killSwitch:
+  # ConfigMap name containing kill switch
+  configMapName: aswarm-killswitch
+  
+  # Default state
+  defaultState: "enabled"
+  
+  # Check interval
+  checkIntervalSeconds: 30
+
+# Network policies
+networkPolicies:
+  # Enable network policies for A-SWARM components
+  enabled: true
+  
+  # Allow ingress from these namespaces
+  allowedNamespaces:
+    - kube-system
+    - monitoring
+    
+# Pod Security Standards
+podSecurityStandards:
+  enforce: restricted
+  audit: restricted
+  warn: restricted
+
+# Test/demo workloads
+demo:
+  # Enable demo workloads
+  enabled: false
+  
+  # Noisy neighbor deployment
+  noisy:
+    replicas: 30
+    
+  # Anomaly job
+  anomaly:
+    enabled: true
+    schedule: "*/5 * * * *"
+
+# Advanced settings
+advanced:
+  # Lease settings
+  lease:
+    durationSeconds: 10
+    renewIntervalSeconds: 3
+    
+  # Watch timeout
+  watchTimeoutSeconds: 300
+  
+  # Evidence retention
+  evidenceRetentionDays: 30
+  
+  # Debug mode
+  debug: false

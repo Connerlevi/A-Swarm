@@ -1,0 +1,46 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: aswarm-prod
+
+resources:
+  - ../../base
+  - blue-api-pvc.yaml
+  - blue-api-externalsecret.yaml
+  - blue-api-pdb.yaml
+
+# Production image with digest pinning
+images:
+  - name: aswarm-blue-api
+    digest: sha256:6621a49bdca59d4178b0a117c0ced9323c3f761c0a3ad2653aba4239fa7b26d4
+
+# High availability
+replicas:
+  - name: aswarm-blue-api
+    count: 2
+
+# Production-specific patches
+patches:
+  - path: deployment-patch.yaml
+    target:
+      kind: Deployment
+      name: aswarm-blue-api
+  - path: ingress-patch.yaml
+    target:
+      kind: Ingress
+      name: aswarm-blue-api
+  - path: networkpolicy-patch.yaml
+    target:
+      kind: NetworkPolicy
+      name: aswarm-blue-api
+  - path: sync-wave-patch.yaml
+
+# Production-specific labels
+labels:
+  - pairs:
+      environment: production
+      tier: prod
+
+# Add monitoring resources if kube-prometheus-stack is installed
+# Uncomment when ServiceMonitor/PrometheusRule are needed:
+# - ../../monitoring

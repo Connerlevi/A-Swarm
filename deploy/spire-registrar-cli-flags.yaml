@@ -1,0 +1,269 @@
+---
+# SPIRE Kubernetes Workload Registrar - CLI flags version (PRODUCTION READY)
+# Automatically creates SPIFFE entries based on K8s namespace/serviceaccount/labels
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spire-k8s-workload-registrar
+  namespace: spire-system
+---
+# Registrar ClusterRole - complete permissions
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spire-k8s-workload-registrar
+rules:
+- apiGroups: [""]
+  resources: ["pods", "namespaces", "nodes", "endpoints", "serviceaccounts", "events"]
+  verbs: ["get", "list", "watch"]
+---
+# Registrar ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: spire-k8s-workload-registrar
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: spire-k8s-workload-registrar
+subjects:
+- kind: ServiceAccount
+  name: spire-k8s-workload-registrar
+  namespace: spire-system
+---
+# Registrar Deployment - using gRPC + CSI + CLI flags
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spire-k8s-workload-registrar
+  namespace: spire-system
+  labels:
+    app: spire-k8s-workload-registrar
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spire-k8s-workload-registrar
+  template:
+    metadata:
+      labels:
+        app: spire-k8s-workload-registrar
+    spec:
+      serviceAccountName: spire-k8s-workload-registrar
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+      containers:
+      - name: registrar
+        image: ghcr.io/spiffe/k8s-workload-registrar:1.9.0
+        args:
+        # Use explicit flags for compatibility and clarity
+        - -mode=reconcile
+        - -serverAddr=spire-server.spire-system.svc.cluster.local
+        - -serverPort=8081
+        - -cluster=aswarm-cluster
+        - -agentSocketPath=/spiffe-workload-api/spire-agent.sock
+        - -metrics-addr=:8080
+        - -webhook-enabled=false
+        # Pod controller mode for automatic entry creation
+        - -pod-controller
+        - -identity-template=ns/{{.Pod.Namespace}}/sa/{{.Pod.ServiceAccount}}
+        - -identity-template-label=spiffe.io/spiffe-id
+        - -pod-label=spiffe.io/spiffe-id
+        # A-SWARM specific annotation mappings (fixed template syntax)
+        - -pod-annotation=aswarm.io/workload-type=workload_type/{{ index .Pod.Annotations "aswarm.io/workload-type" }}
+        - -pod-annotation=aswarm.io/cluster-id=cluster/{{ index .Pod.Annotations "aswarm.io/cluster-id" }}
+        - -pod-annotation=aswarm.io/node-id=node/{{ index .Pod.Annotations "aswarm.io/node-id" }}
+        env:
+        - name: SPIFFE_ENDPOINT_SOCKET
+          value: unix:///spiffe-workload-api/spire-agent.sock
+        ports:
+        - containerPort: 8080
+          name: metrics
+          protocol: TCP
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+        - name: spiffe-workload-api
+          mountPath: /spiffe-workload-api
+          readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /metrics
+            port: metrics
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /metrics
+            port: metrics
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+      volumes:
+      - name: spiffe-workload-api
+        csi:
+          driver: csi.spiffe.io
+          readOnly: true
+---
+# Registrar Metrics Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: spire-k8s-workload-registrar-metrics
+  namespace: spire-system
+  labels:
+    app: spire-k8s-workload-registrar
+spec:
+  selector:
+    app: spire-k8s-workload-registrar
+  ports:
+  - name: metrics
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+---
+# NetworkPolicy - Allow registrar to talk to SPIRE server
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: spire-server-allow-registrar
+  namespace: spire-system
+spec:
+  podSelector:
+    matchLabels:
+      app: spire-server
+  policyTypes: ["Ingress"]
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: spire-k8s-workload-registrar
+    ports:
+    - protocol: TCP
+      port: 8081
+---
+# Example: A-SWARM Pod Integration Template
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aswarm-spiffe-integration-template
+  namespace: spire-system
+data:
+  pheromone-deployment.yaml: |
+    # Template for integrating SPIFFE into A-SWARM pheromone deployment
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: aswarm-pheromone
+      namespace: aswarm
+    spec:
+      selector:
+        matchLabels:
+          app: aswarm-pheromone
+      template:
+        metadata:
+          labels:
+            app: aswarm-pheromone
+            spiffe.io/spiffe-id: "true"  # Enable automatic registration
+          annotations:
+            aswarm.io/workload-type: "pheromone"
+            aswarm.io/cluster-id: "default"
+        spec:
+          serviceAccountName: aswarm-pheromone
+          containers:
+          - name: pheromone
+            image: aswarm/pheromone:latest
+            env:
+            - name: SPIFFE_ENDPOINT_SOCKET
+              value: unix:///spiffe-workload-api/spire-agent.sock
+            volumeMounts:
+            - name: spiffe-workload-api
+              mountPath: /spiffe-workload-api
+              readOnly: true
+          volumes:
+          - name: spiffe-workload-api
+            csi:
+              driver: csi.spiffe.io
+              readOnly: true
+
+  sentinel-daemonset.yaml: |
+    # Template for integrating SPIFFE into A-SWARM sentinel DaemonSet
+    apiVersion: apps/v1
+    kind: DaemonSet
+    metadata:
+      name: aswarm-sentinel
+      namespace: aswarm
+    spec:
+      selector:
+        matchLabels:
+          app: aswarm-sentinel
+      template:
+        metadata:
+          labels:
+            app: aswarm-sentinel
+            spiffe.io/spiffe-id: "true"  # Enable automatic registration
+          annotations:
+            aswarm.io/workload-type: "sentinel"
+            aswarm.io/cluster-id: "default"
+            # Node ID will be populated dynamically
+        spec:
+          serviceAccountName: aswarm-sentinel
+          containers:
+          - name: sentinel
+            image: aswarm/sentinel:latest
+            env:
+            - name: SPIFFE_ENDPOINT_SOCKET
+              value: unix:///spiffe-workload-api/spire-agent.sock
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            volumeMounts:
+            - name: spiffe-workload-api
+              mountPath: /spiffe-workload-api
+              readOnly: true
+          volumes:
+          - name: spiffe-workload-api
+            csi:
+              driver: csi.spiffe.io
+              readOnly: true
+
+  expected-identities.md: |
+    # Expected SPIFFE Identities Generated by Registrar
+    
+    With the identity template and annotations above, the registrar will create:
+    
+    ## Base Identities (from template)
+    - `spiffe://aswarm.local/ns/aswarm/sa/aswarm-pheromone`
+    - `spiffe://aswarm.local/ns/aswarm/sa/aswarm-sentinel`
+    - `spiffe://aswarm.local/ns/aswarm/sa/aswarm-api`
+    - `spiffe://aswarm.local/ns/aswarm-test/sa/aswarm-test-pheromone`
+    - `spiffe://aswarm.local/ns/aswarm-test/sa/aswarm-test-sentinel`
+    
+    ## Extended Identities (with annotations)
+    If pods have annotations like `aswarm.io/workload-type: "pheromone"`:
+    - `spiffe://aswarm.local/ns/aswarm/sa/aswarm-pheromone/workload_type/pheromone`
+    - `spiffe://aswarm.local/ns/aswarm/sa/aswarm-sentinel/workload_type/sentinel`
+    
+    ## Verification Commands
+    ```bash
+    # List all entries
+    kubectl -n spire-system exec deploy/spire-server -- spire-server entry list
+    
+    # Fetch SVID from workload
+    kubectl exec <aswarm-pod> -- \
+      spire-agent api fetch x509 -socketPath /spiffe-workload-api/spire-agent.sock
+    ```

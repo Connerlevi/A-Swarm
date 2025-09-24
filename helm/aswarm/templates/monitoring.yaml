@@ -1,0 +1,86 @@
+{{- if and .Values.global.enabled .Values.monitoring.prometheus.enabled -}}
+---
+# Service for Sentinel metrics
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aswarm.fullname" . }}-sentinel-metrics
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aswarm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sentinel
+spec:
+  type: ClusterIP
+  clusterIP: None  # Headless service for DaemonSet
+  ports:
+    - port: {{ .Values.monitoring.prometheus.port }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    {{- include "aswarm.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: sentinel
+---
+# Service for Pheromone metrics
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aswarm.fullname" . }}-pheromone-metrics
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aswarm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pheromone
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.monitoring.prometheus.port }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    {{- include "aswarm.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: pheromone
+---
+# Service for MicroAct metrics
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aswarm.fullname" . }}-microact-metrics
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aswarm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: microact
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.monitoring.prometheus.port }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    {{- include "aswarm.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: microact
+
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+---
+# ServiceMonitor for Prometheus Operator
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "aswarm.fullname" . }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aswarm.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "aswarm.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval }}
+      path: {{ .Values.monitoring.prometheus.path }}
+{{- end }}
+{{- end -}}

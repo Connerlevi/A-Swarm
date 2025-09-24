@@ -1,0 +1,269 @@
+# Gatekeeper constraints to enforce "No builds in production" policy
+# Prevents container builders, requires image digests, denies privileged containers
+
+---
+# Deny known builder images
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: nobuilderimages
+  annotations:
+    description: "Prevents deployment of known container builder images in production"
+spec:
+  crd:
+    spec:
+      names:
+        kind: NoBuilderImages
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            exemptNamespaces:
+              type: array
+              items: 
+                type: string
+  targets:
+  - target: admission.k8s.gatekeeper.sh
+    rego: |
+      package nobuilderimages
+
+      # Collect all containers across object shapes
+      containers[c] {
+        c := input.review.object.spec.containers[_]
+      }
+      containers[c] {
+        c := input.review.object.spec.template.spec.containers[_]
+      }
+      containers[c] {
+        c := input.review.object.spec.jobTemplate.spec.template.spec.containers[_]
+      }
+      init_containers[c] {
+        c := input.review.object.spec.initContainers[_]
+      }
+      init_containers[c] {
+        c := input.review.object.spec.template.spec.initContainers[_]
+      }
+      init_containers[c] {
+        c := input.review.object.spec.jobTemplate.spec.template.spec.initContainers[_]
+      }
+
+      exempt_ns {
+        some nslist
+        nslist := input.parameters.exemptNamespaces
+        input.review.object.metadata.namespace == nslist[_]
+      }
+
+      violation[{"msg": msg}] {
+        not exempt_ns
+        c := containers[_]
+        is_builder_image(c.image)
+        msg := sprintf("Builder image '%s' is not allowed in production. Use pre-built, signed images.", [c.image])
+      }
+
+      violation[{"msg": msg}] {
+        not exempt_ns
+        c := init_containers[_]
+        is_builder_image(c.image)
+        msg := sprintf("Builder image '%s' (initContainer) is not allowed in production.", [c.image])
+      }
+
+      is_builder_image(img) {
+        contains(img, "docker:")
+        contains(img, "dind")
+      }
+      is_builder_image(img) { contains(img, "moby/buildkit") }
+      is_builder_image(img) { contains(img, "docker/buildkit") }
+      is_builder_image(img) { contains(img, "gcr.io/kaniko-project/executor") }
+      is_builder_image(img) { contains(img, "quay.io/containers/buildah") }
+      is_builder_image(img) { contains(img, "quay.io/podman/") }
+      is_builder_image(img) { contains(img, "gcr.io/buildpacks/") }
+      is_builder_image(img) { contains(img, "paketo-buildpacks") }
+      is_builder_image(img) { contains(img, "bazel") }
+      is_builder_image(img) { contains(img, "gcr.io/k8s-skaffold/") }
+      is_builder_image(img) { contains(img, "ghcr.io/ko-build/ko") }
+
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: NoBuilderImages
+metadata:
+  name: no-builder-images-prod
+  annotations:
+    description: "Enforces no-build policy in production namespaces"
+spec:
+  enforcementAction: deny  # Start with 'dryrun' then 'audit' then 'deny'
+  match:
+    kinds:
+    - apiGroups: ["apps", ""]
+      kinds: ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Pod", "Job", "CronJob"]
+  parameters:
+    exemptNamespaces: ["kube-system", "gatekeeper-system"]
+
+---
+# Require image digests (no mutable tags)
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: requireimagedigest
+  annotations:
+    description: "Requires all container images to be specified by digest"
+spec:
+  crd:
+    spec:
+      names:
+        kind: RequireImageDigest
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            exemptImages:
+              type: array
+              items: 
+                type: string
+  targets:
+  - target: admission.k8s.gatekeeper.sh
+    rego: |
+      package requireimagedigest
+
+      containers[c] { c := input.review.object.spec.containers[_] }
+      containers[c] { c := input.review.object.spec.template.spec.containers[_] }
+      containers[c] { c := input.review.object.spec.jobTemplate.spec.template.spec.containers[_] }
+
+      init_containers[c] { c := input.review.object.spec.initContainers[_] }
+      init_containers[c] { c := input.review.object.spec.template.spec.initContainers[_] }
+      init_containers[c] { c := input.review.object.spec.jobTemplate.spec.template.spec.initContainers[_] }
+
+      has_digest(img) { contains(img, "@sha256:") }
+
+      exempt(img) {
+        some lst
+        lst := input.parameters.exemptImages
+        img == lst[_]
+      }
+
+      violation[{"msg": msg}] {
+        c := containers[_]
+        not has_digest(c.image)
+        not exempt(c.image)
+        msg := sprintf("Container image must be pinned by digest: %s", [c.image])
+      }
+
+      violation[{"msg": msg}] {
+        c := init_containers[_]
+        not has_digest(c.image)
+        not exempt(c.image)
+        msg := sprintf("Init container image must be pinned by digest: %s", [c.image])
+      }
+
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: RequireImageDigest
+metadata:
+  name: require-image-digest-prod
+  annotations:
+    description: "Enforces digest-only images in A-SWARM namespaces"
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+    - apiGroups: ["apps", ""]
+      kinds: ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Pod", "Job", "CronJob"]
+    namespaces: ["aswarm", "aswarm-redteam", "aswarm-blueteam"]
+  parameters:
+    exemptImages: []  # Zero exemptions for production
+
+---
+# Deny privileged containers and capabilities
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: denyprivileged
+  annotations:
+    description: "Denies privileged containers and dangerous capabilities"
+spec:
+  crd:
+    spec:
+      names:
+        kind: DenyPrivileged
+      validation:
+        openAPIV3Schema:
+          type: object
+  targets:
+  - target: admission.k8s.gatekeeper.sh
+    rego: |
+      package denyprivileged
+
+      podspec[s] { s := input.review.object.spec }
+      podspec[s] { s := input.review.object.spec.template.spec }
+      podspec[s] { s := input.review.object.spec.jobTemplate.spec.template.spec }
+
+      all_containers[c] { c := podspec[_].containers[_] }
+      all_containers[c] { c := podspec[_].initContainers[_] }
+
+      violation[{"msg": msg}] {
+        c := all_containers[_]
+        c.securityContext.privileged == true
+        msg := sprintf("Privileged container not allowed: %s", [c.name])
+      }
+
+      violation[{"msg": msg}] {
+        c := all_containers[_]
+        c.securityContext.allowPrivilegeEscalation == true
+        msg := sprintf("allowPrivilegeEscalation must be false: %s", [c.name])
+      }
+
+      violation[{"msg": msg}] {
+        c := all_containers[_]
+        c.securityContext.runAsUser == 0
+        msg := sprintf("runAsUser=0 (root) not allowed: %s", [c.name])
+      }
+
+      violation[{"msg": msg}] {
+        c := all_containers[_]
+        c.securityContext.capabilities.add[_] == "SYS_ADMIN"
+        msg := sprintf("SYS_ADMIN capability not allowed: %s", [c.name])
+      }
+
+      violation[{"msg": msg}] {
+        c := all_containers[_]
+        c.securityContext.capabilities.add[_] == "NET_ADMIN"
+        msg := sprintf("NET_ADMIN capability not allowed: %s", [c.name])
+      }
+
+      violation[{"msg": msg}] {
+        c := all_containers[_]
+        c.securityContext.capabilities.add[_] == "SYS_MODULE"
+        msg := sprintf("SYS_MODULE capability not allowed: %s", [c.name])
+      }
+
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: DenyPrivileged
+metadata:
+  name: deny-privileged-prod
+  annotations:
+    description: "Prevents privileged containers and dangerous capabilities"
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+    - apiGroups: ["apps", ""]
+      kinds: ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Pod", "Job", "CronJob"]
+    excludedNamespaces: ["kube-system", "gatekeeper-system"]
+
+---
+# ServiceMonitor for Gatekeeper audit metrics (optional)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: gatekeeper-audit-violations
+  namespace: gatekeeper-system
+  labels:
+    app: gatekeeper-audit
+spec:
+  selector:
+    matchLabels:
+      gatekeeper.sh/system: "yes"
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics

@@ -1,0 +1,233 @@
+version: '3.8'
+
+x-common-env: &common_env
+  ENV: ${ENV:-dev}
+  CLUSTER: ${CLUSTER:-pilot}
+
+x-common-logging: &common_logging
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "20m"
+      max-file: "3"
+
+networks:
+  aswarm-net:
+    driver: bridge
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  api-data:
+  evolution-data:
+  federation-data:
+  events-wal:
+
+services:
+  # Core A-SWARM API
+  api:
+    image: aswarm/api:${ASWARM_VERSION:-latest}
+    container_name: aswarm-api
+    restart: unless-stopped
+    ports: ["8000:8000"]
+    environment:
+      <<: *common_env
+      JWT_SECRET: ${JWT_SECRET:-changeme-dev-only}
+      PROMETHEUS_PORT: 9000
+      EVOLUTION_SERVER: evolution:50051
+      FEDERATION_SERVER: federation:9443
+      EVOLUTION_CIRCUIT_BREAKER: ${EVOLUTION_CIRCUIT_BREAKER:-true}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      TLS_SELF_SIGNED: ${TLS_SELF_SIGNED:-true}
+    volumes:
+      - api-data:/data
+      - ./assets/certs:/certs:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/api/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    depends_on:
+      evolution:
+        condition: service_healthy
+      federation:
+        condition: service_healthy
+      prometheus:
+        condition: service_started
+    networks: [aswarm-net]
+    <<: *common_logging
+
+  # Evolution gRPC Server
+  evolution:
+    image: aswarm/evolution:${ASWARM_VERSION:-latest}
+    container_name: aswarm-evolution
+    restart: unless-stopped
+    ports: ["50051:50051"]
+    environment:
+      <<: *common_env
+      PROMETHEUS_PORT: 9000
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      PROMOTE_MAX_CANARY_PCT: ${PROMOTE_MAX_CANARY_PCT:-5}
+      ROLLBACK_THRESHOLD: ${ROLLBACK_THRESHOLD:-2}
+      SAFETY_VIOLATION_LIMIT: ${SAFETY_VIOLATION_LIMIT:-0}
+      FITNESS_THRESHOLD: ${FITNESS_THRESHOLD:-0.70}
+    volumes:
+      - evolution-data:/data
+    healthcheck:
+      # TCP health for gRPC
+      test: ["CMD-SHELL", "nc -z localhost 50051 || exit 1"]
+      interval: 10s
+      timeout: 2s
+      retries: 20
+    networks: [aswarm-net]
+    <<: *common_logging
+
+  # Federation gRPC Server
+  federation:
+    image: aswarm/federation:${ASWARM_VERSION:-latest}
+    container_name: aswarm-federation
+    restart: unless-stopped
+    ports: ["9443:9443"]
+    environment:
+      <<: *common_env
+      FEDERATION_PEERS: ${FEDERATION_PEERS:-}
+      FEDERATION_TRUST_MIN: ${FEDERATION_TRUST_MIN:-0.60}
+      FEDERATION_RATE_LIMIT_RPM: ${FEDERATION_RATE_LIMIT_RPM:-600}
+      PROMETHEUS_PORT: 9000
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - federation-data:/data
+      - ./assets/certs:/certs:ro
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 9443 || exit 1"]
+      interval: 10s
+      timeout: 2s
+      retries: 20
+    networks: [aswarm-net]
+    <<: *common_logging
+
+  # UDP Listener (Pheromone)
+  udp-listener:
+    image: aswarm/pheromone:${ASWARM_VERSION:-latest}
+    container_name: aswarm-udp-listener
+    restart: unless-stopped
+    ports: ["8089:8089/udp"]
+    environment:
+      <<: *common_env
+      EVOLUTION_SERVER: evolution:50051
+      FEDERATION_SERVER: federation:9443
+      LEARNING_THRESHOLD: ${LEARNING_THRESHOLD:-0.5}
+      EVOLUTION_CIRCUIT_BREAKER: ${EVOLUTION_CIRCUIT_BREAKER:-true}
+      PROMETHEUS_PORT: 9000
+      EVENT_WAL_PATH: ${EVENT_WAL_PATH:-/data/wal}
+      EVENT_HMAC_KEY: ${EVENT_HMAC_KEY:-pilot-shared-secret}
+      EVENT_QUEUE_MAX_SIZE: ${EVENT_QUEUE_MAX_SIZE:-20000}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - events-wal:/data/wal
+    healthcheck:
+      test: ["CMD-SHELL", "test -e /proc/1 && echo ok || exit 1"] # replace with a real /metrics or /health if available
+      interval: 20s
+      timeout: 5s
+      retries: 6
+    networks: [aswarm-net]
+    <<: *common_logging
+
+  # Prometheus (profile: observability)
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    container_name: aswarm-prometheus
+    restart: unless-stopped
+    profiles: ["observability","full"]
+    ports: ["9090:9090"]
+    volumes:
+      - ./provisioning/prometheus/prometheus.yml.tmpl:/etc/prometheus/prometheus.yml.tmpl:ro
+      - ./provisioning/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    environment:
+      PROMETHEUS_RETENTION: ${PROMETHEUS_RETENTION:-15d}
+      PROMETHEUS_SCRAPE_INTERVAL: ${PROMETHEUS_SCRAPE_INTERVAL:-15s}
+      PROMETHEUS_EVAL_INTERVAL: ${PROMETHEUS_EVAL_INTERVAL:-15s}
+      ASWARM_FAST_SCRAPE_INTERVAL: ${ASWARM_FAST_SCRAPE_INTERVAL:-5s}
+      ENV: ${ENV:-dev}
+      CLUSTER: ${CLUSTER:-pilot}
+    command:
+      - /bin/sh
+      - -lc
+      - |
+        cp /etc/prometheus/prometheus.yml.tmpl /tmp/prom.yml
+        envsubst < /tmp/prom.yml > /etc/prometheus/prometheus.yml
+        exec /bin/prometheus \
+          --config.file=/etc/prometheus/prometheus.yml \
+          --storage.tsdb.path=/prometheus \
+          --storage.tsdb.retention.time=$${PROMETHEUS_RETENTION:-15d} \
+          --web.enable-lifecycle
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- localhost:9090/-/healthy >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+    networks: [aswarm-net]
+    <<: *common_logging
+
+  # Grafana (profile: observability)
+  grafana:
+    image: grafana/grafana:10.0.0
+    container_name: aswarm-grafana
+    restart: unless-stopped
+    profiles: ["observability","full"]
+    ports: ["3000:3000"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_INSTALL_PLUGINS:
+    volumes:
+      - ./provisioning/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./provisioning/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - grafana-data:/var/lib/grafana
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- localhost:3000/api/health | grep -q ok"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+    networks: [aswarm-net]
+    <<: *common_logging
+
+  # NGINX Reverse Proxy (optional)
+  nginx:
+    image: nginx:alpine
+    container_name: aswarm-nginx
+    restart: unless-stopped
+    profiles: ["full"]
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./provisioning/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./provisioning/nginx/sites-enabled:/etc/nginx/sites-enabled:ro
+      - ./assets/certs:/etc/nginx/certs:ro
+      - ./assets/landing:/usr/share/nginx/html:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      grafana:
+        condition: service_started
+    networks: [aswarm-net]
+    <<: *common_logging
+
+  # Seed Traffic (runs once)
+  seed-traffic:
+    image: aswarm/seed-traffic:${ASWARM_VERSION:-latest}
+    container_name: aswarm-seed-traffic
+    restart: "no"
+    profiles: ["seed", "full"]
+    environment:
+      TARGET_HOST: udp-listener
+      TARGET_PORT: 8089
+      BURST_COUNT: ${BURST_COUNT:-10}
+      BURST_DELAY: ${BURST_DELAY:-2}
+      EVENT_HMAC_KEY: ${EVENT_HMAC_KEY:-pilot-shared-secret}
+      ENABLE_SEED_TRAFFIC: ${ENABLE_SEED_TRAFFIC:-true}
+    depends_on:
+      udp-listener:
+        condition: service_healthy
+    networks: [aswarm-net]
+    <<: *common_logging

@@ -1,0 +1,88 @@
+{{- if .Values.global.enabled }}
+A-SWARM has been installed!
+
+Release Name: {{ .Release.Name }}
+Namespace:    {{ .Values.global.namespace }}
+Version:      {{ .Chart.AppVersion }}
+
+Current Configuration:
+- Mode:       {{ if .Values.global.dryRun }}DRY RUN{{ else }}LIVE{{ end }}
+- Max Ring:   {{ .Values.global.maxRing }}
+- Components:
+  * Sentinel:  {{ if .Values.sentinel.enabled }}✅ Enabled{{ else }}❌ Disabled{{ end }}
+  * Pheromone: {{ if .Values.pheromone.enabled }}✅ Enabled{{ else }}❌ Disabled{{ end }}
+  * MicroAct:  {{ if .Values.microact.enabled }}✅ Enabled{{ else }}❌ Disabled{{ end }}
+  * FastPath:  {{ if .Values.fastpath.enabled }}✅ Enabled{{ else }}❌ Disabled{{ end }}
+
+🔐 Kill Switch:
+The global kill switch is currently: {{ .Values.killSwitch.defaultState | upper }}
+
+To disable all enforcement:
+  kubectl patch configmap {{ .Values.killSwitch.configMapName }} \
+    -n {{ .Values.global.namespace }} \
+    --type merge -p '{"data":{"state":"disabled"}}'
+
+To re-enable:
+  kubectl patch configmap {{ .Values.killSwitch.configMapName }} \
+    -n {{ .Values.global.namespace }} \
+    --type merge -p '{"data":{"state":"enabled"}}'
+
+📊 Monitoring:
+{{- if .Values.monitoring.prometheus.enabled }}
+Prometheus metrics are exposed on port {{ .Values.monitoring.prometheus.port }}
+
+View metrics:
+  kubectl port-forward -n {{ .Values.global.namespace }} \
+    svc/{{ include "aswarm.fullname" . }}-pheromone-metrics {{ .Values.monitoring.prometheus.port }}:{{ .Values.monitoring.prometheus.port }}
+  
+Then visit: http://localhost:{{ .Values.monitoring.prometheus.port }}/metrics
+{{- else }}
+Prometheus metrics are disabled. Enable with: --set monitoring.prometheus.enabled=true
+{{- end }}
+
+🧪 Test the System:
+{{- if .Values.demo.enabled }}
+Demo workloads are enabled. The anomaly job will run on schedule: {{ .Values.demo.anomaly.schedule }}
+
+To trigger a test manually:
+  kubectl create job --from=cronjob/{{ include "aswarm.fullname" . }}-anomaly-test manual-test-$(date +%s) \
+    -n {{ .Values.global.namespace }}
+{{- else }}
+To test A-SWARM, deploy a workload and trigger an anomaly:
+
+1. Deploy test workload:
+   kubectl run test-pod --image=nginx -n {{ .Values.global.namespace }}
+
+2. Label it for monitoring:
+   kubectl label pod test-pod aswarm/monitor=true -n {{ .Values.global.namespace }}
+
+3. Trigger anomaly detection:
+   kubectl annotate pod test-pod aswarm.ai/anomaly-score="0.85" -n {{ .Values.global.namespace }}
+{{- end }}
+
+📋 Evidence Collection:
+{{- if .Values.evidence.enabled }}
+Evidence collection is scheduled: {{ .Values.evidence.schedule }}
+
+Generate evidence pack manually:
+  kubectl exec -n {{ .Values.global.namespace }} \
+    deployment/{{ include "aswarm.fullname" . }}-microact -- \
+    python -m scripts.generate_evidence_pack
+{{- end }}
+
+⚠️  Important Notes:
+{{- if .Values.global.dryRun }}
+- System is in DRY RUN mode. Actions will be logged but not executed.
+  To enable enforcement: --set global.dryRun=false
+{{- end }}
+{{- if gt (int .Values.global.maxRing) 3 }}
+- Ring {{ .Values.global.maxRing }} actions are enabled. This includes disruptive actions!
+{{- end }}
+
+For more information, visit: https://github.com/Connerlevi/A-Swarm
+
+{{- else }}
+⚠️  A-SWARM is DISABLED via global.enabled=false
+
+To enable: helm upgrade {{ .Release.Name }} ./aswarm --set global.enabled=true
+{{- end }}
