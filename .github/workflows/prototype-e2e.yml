@@ -75,7 +75,7 @@ jobs:
           ls -lah artifacts/ || true
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: aswarm-prototype-artifacts
           path: prototype/artifacts
